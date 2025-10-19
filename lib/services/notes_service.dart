@@ -118,6 +118,14 @@ class NotesService {
     );
   }
 
+  Future<void> togglePinned(String id) async {
+    await updateNote(
+      id,
+      transform: (note) =>
+          note.copyWith(pinned: !note.pinned, updatedAt: DateTime.now()),
+    );
+  }
+
   @visibleForTesting
   void replaceAllNotes(List<Note> notes) {
     _notesNotifier.value = List<Note>.unmodifiable(notes);

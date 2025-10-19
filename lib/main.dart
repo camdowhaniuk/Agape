@@ -51,7 +51,11 @@ class _AgapeAppState extends State<AgapeApp> {
         activationTick: _aiActivationTick,
         navVisibilityResetTick: _navVisibilityResetTick,
       ),
-      const NotesScreen(),
+      NotesScreen(
+        onScrollVisibilityChange: _setBottomBarVisible,
+        navVisible: _showBottomBar,
+        navVisibilityResetTick: _navVisibilityResetTick,
+      ),
       MoreScreen(
         isDarkMode: _themeMode == ThemeMode.dark,
         onDarkModeChanged: _setDarkMode,
@@ -101,54 +105,32 @@ class _AgapeAppState extends State<AgapeApp> {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 280),
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    transitionBuilder: (child, animation) => FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0, 0.25),
-                          end: Offset.zero,
-                        ).animate(animation),
-                        child: child,
-                      ),
+                  child: SafeArea(
+                    top: false,
+                    left: false,
+                    right: false,
+                    bottom: true,
+                    minimum: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                    child: _IOSNavBar(
+                      currentIndex: _selectedIndex,
+                      onTap: (index) {
+                        if (index == 2) {
+                          setState(() {
+                            _showBottomBar = true;
+                            _selectedIndex = index;
+                            _aiActivationTick++;
+                            _navVisibilityResetTick++;
+                          });
+                        } else {
+                          setState(() {
+                            _showBottomBar = true;
+                            _selectedIndex = index;
+                            _navVisibilityResetTick++;
+                          });
+                        }
+                      },
+                      visible: _showBottomBar,
                     ),
-                    child: _showBottomBar
-                        ? SafeArea(
-                            key: const ValueKey('nav-overlay'),
-                            top: false,
-                            left: false,
-                            right: false,
-                            bottom: true,
-                            minimum: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                            child: _IOSNavBar(
-                              currentIndex: _selectedIndex,
-                              onTap: (index) {
-                                if (index == 2) {
-                                  setState(() {
-                                    _showBottomBar = true;
-                                    _selectedIndex = index;
-                                    _aiActivationTick++;
-                                    _navVisibilityResetTick++;
-                                  });
-                                } else {
-                                  setState(() {
-                                    _showBottomBar = true;
-                                    _selectedIndex = index;
-                                    _navVisibilityResetTick++;
-                                  });
-                                }
-                              },
-                              onQuickAction: () => setState(() {
-                                _showBottomBar = true;
-                                _selectedIndex = 4;
-                                _navVisibilityResetTick++;
-                              }),
-                            ),
-                          )
-                        : const SizedBox.shrink(key: ValueKey('nav-hidden')),
                   ),
                 ),
               ],
@@ -164,12 +146,12 @@ class _IOSNavBar extends StatelessWidget {
   const _IOSNavBar({
     required this.currentIndex,
     required this.onTap,
-    required this.onQuickAction,
+    this.visible = true,
   });
 
   final int currentIndex;
   final ValueChanged<int> onTap;
-  final VoidCallback onQuickAction;
+  final bool visible;
 
   static const List<_NavBarItem> _items = [
     _NavBarItem(icon: Icons.home_rounded, label: 'Home'),
@@ -181,16 +163,28 @@ class _IOSNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final int activeIndex = currentIndex.clamp(0, _items.length - 1);
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: _LiquidTabStrip(
-        items: _items,
-        activeIndex: activeIndex,
-        showIndicator: true,
-        onTap: onTap,
+    return IgnorePointer(
+      ignoring: !visible,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        opacity: visible ? 1 : 0,
+        child: AnimatedSlide(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          offset: visible ? Offset.zero : const Offset(0, 0.25),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: _LiquidTabStrip(
+              items: _items,
+              activeIndex: activeIndex,
+              showIndicator: true,
+              onTap: onTap,
+            ),
+          ),
+        ),
       ),
     );
   }

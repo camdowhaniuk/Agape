@@ -13,7 +13,7 @@ class AIService {
   AIService({
     required this.systemPrompt,
     http.Client? client,
-    this.model = 'gpt-4o-mini',
+    this.model = 'gpt-4o',
     this.temperature = 0.7,
     this.maxHistoryEntries = 14,
     String? apiKey,
