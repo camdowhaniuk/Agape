@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Agape App Icon (Square)</title>
+  <defs>
+    <linearGradient id="agapeGrad" x1="180" y1="160" x2="844" y2="864" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6F4AFF"/>
+      <stop offset="1" stop-color="#FF7AA2"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed background (no transparency) -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#agapeGrad)"/>
+  <!-- Foreground mark in white for contrast -->
+  <!-- Chat bubble body -->
+  <rect x="200" y="220" width="624" height="496" rx="110" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Chat bubble tail -->
+  <path d="M410 700 L374 860 L522 742" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Cross -->
+  <path d="M512 310 L512 598" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round"/>
+  <path d="M444 420 L580 420" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round"/>
+  <!-- Small sparkle -->
+  <g stroke="#FFFFFF" stroke-linecap="round" stroke-width="32">
+    <path d="M742 210 L742 270"/>
+    <path d="M712 240 L772 240"/>
+  </g>
+</svg>

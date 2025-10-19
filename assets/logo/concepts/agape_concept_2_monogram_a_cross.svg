@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Agape Concept 2 — Monogram A + Cross + Heart</title>
+  <desc>Stylized letter A suggesting a path upward, with a cross inside and a small heart below the crossbar.</desc>
+  <!-- Monogram A (two strokes) -->
+  <path d="M360 760 L512 260 L664 760" stroke="#6F4AFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Cross inside the A -->
+  <path d="M512 380 L512 620" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+  <path d="M450 500 L574 500" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+  <!-- Small heart below crossbar -->
+  <path d="M512 620 C 498 600, 460 606, 462 638 C 464 666, 488 692, 512 710 C 536 692, 560 666, 562 638 C 564 606, 526 600, 512 620 Z"
+        stroke="#6F4AFF" stroke-width="32" fill="none" stroke-linejoin="round"/>
+</svg>
+

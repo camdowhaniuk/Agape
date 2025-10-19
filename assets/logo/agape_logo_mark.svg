@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Agape Logo Mark</title>
+  <desc>Chat bubble with cross and sparkle — representing Agape: Scripture-centered AI guidance.</desc>
+  <!-- Chat bubble body -->
+  <rect x="160" y="180" width="704" height="560" rx="120" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Chat bubble tail -->
+  <path d="M420 760 L380 920 L540 800" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Cross in the center -->
+  <path d="M512 320 L512 640" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+  <path d="M432 440 L592 440" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+  <!-- Sparkle accent (top-right) -->
+  <g stroke="#6F4AFF" stroke-linecap="round" stroke-width="32">
+    <path d="M740 220 L740 280"/>
+    <path d="M710 250 L770 250"/>
+  </g>
+</svg>
+

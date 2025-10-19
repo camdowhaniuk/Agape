@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Agape Concept 1 — Heart + Cross</title>
+  <desc>Outlined heart representing agape love with a central cross.</desc>
+  <!-- Heart outline -->
+  <path d="M512 240 C 420 120, 220 220, 260 420 C 290 560, 420 660, 512 760 C 604 660, 734 560, 764 420 C 804 220, 604 120, 512 240 Z"
+        stroke="#6F4AFF" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Cross -->
+  <path d="M512 360 L512 620" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+  <path d="M430 490 L594 490" stroke="#6F4AFF" stroke-width="48" stroke-linecap="round"/>
+</svg>
+

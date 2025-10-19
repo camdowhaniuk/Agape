@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Agape Concept 3 — Cross Over Heart</title>
+  <defs>
+    <linearGradient id="agapeGrad" x1="260" y1="220" x2="780" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6F4AFF"/>
+      <stop offset="1" stop-color="#FF7AA2"/>
+    </linearGradient>
+  </defs>
+  <desc>Gradient-filled heart (agape) with a bold white cross centered.</desc>
+  <!-- Heart filled background -->
+  <path d="M512 240 C 420 120, 220 220, 260 420 C 290 560, 420 660, 512 760 C 604 660, 734 560, 764 420 C 804 220, 604 120, 512 240 Z"
+        fill="url(#agapeGrad)"/>
+  <!-- Cross in white on top -->
+  <path d="M512 340 L512 640" stroke="#FFFFFF" stroke-width="56" stroke-linecap="round"/>
+  <path d="M430 480 L594 480" stroke="#FFFFFF" stroke-width="56" stroke-linecap="round"/>
+</svg>
+
