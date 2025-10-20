@@ -65,6 +65,13 @@ Failing any of these should block a PR.
 - Notes feature specifics: `docs/notes.md`
 - Contribution guidelines: `CONTRIBUTING.md`
 
+### Specs and Roadmap
+
+- v1 Spec (product + technical): `docs/v1_spec.md`
+- Testing plan: `docs/testing.md`
+- Roadmap and backlog: `docs/roadmap.md`
+- Configuration and env vars: `docs/configuration.md`
+
 Keep documentation updated when you introduce new features or workflows.
 
 ## Maintenance

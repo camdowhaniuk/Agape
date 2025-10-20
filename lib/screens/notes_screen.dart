@@ -1,9 +1,12 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import '../models/note.dart';
+import '../services/highlight_service.dart';
 import '../services/notes_service.dart';
 import 'note_editor_screen.dart';
+import 'highlights_screen.dart';
 import '../widgets/notes_section_list.dart';
 
 class NotesScreen extends StatefulWidget {
@@ -12,11 +15,13 @@ class NotesScreen extends StatefulWidget {
     this.onScrollVisibilityChange,
     this.navVisible = true,
     this.navVisibilityResetTick = 0,
+    this.onHighlightSelected,
   });
 
   final void Function(bool)? onScrollVisibilityChange;
   final bool navVisible;
   final int navVisibilityResetTick;
+  final void Function(HighlightEntry entry)? onHighlightSelected;
 
   @override
   State<NotesScreen> createState() => _NotesScreenState();
@@ -81,6 +86,15 @@ class _NotesScreenState extends State<NotesScreen> {
     }
   }
 
+  Future<void> _openHighlights() async {
+    final selected = await Navigator.of(context).push<HighlightEntry>(
+      MaterialPageRoute(builder: (_) => const HighlightsScreen()),
+    );
+    if (selected != null) {
+      widget.onHighlightSelected?.call(selected);
+    }
+  }
+
   void _handleNotesChanged() {
     _syncNotesFromService();
   }
@@ -125,34 +139,23 @@ class _NotesScreenState extends State<NotesScreen> {
             final theme = Theme.of(context);
             final colorScheme = theme.colorScheme;
             final isDark = theme.brightness == Brightness.dark;
-            final backgroundGradient = LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                colorScheme.surfaceBright,
-                Color.alphaBlend(
-                  colorScheme.primary.withValues(alpha: isDark ? 0.08 : 0.04),
-                  colorScheme.surface,
-                ),
-                colorScheme.surfaceDim,
-              ],
-            );
             final totalNotes =
                 pinnedNotes.length +
                 grouped.values.fold<int>(0, (sum, notes) => sum + notes.length);
-            const double navBarHeight = 58;
+            const double navBarHeight = 56;
             final media = MediaQuery.of(context);
             final bottomInset = media.padding.bottom + navBarHeight + 32;
             final bool hasResults =
                 pinnedNotes.isNotEmpty ||
                 entries.any((entry) => entry.value.isNotEmpty);
 
-            final sectionWidgets = <Widget>[
-              if (hasResults) ...[
-                const SizedBox(height: 8),
-                if (pinnedNotes.isNotEmpty) ...[
+            final sectionWidgets = <Widget>[const SizedBox(height: 8)];
+
+            if (hasResults) {
+              if (pinnedNotes.isNotEmpty) {
+                sectionWidgets.addAll([
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
                     child: Text(
                       'Pinned',
                       style: theme.textTheme.titleMedium?.copyWith(
@@ -177,8 +180,10 @@ class _NotesScreenState extends State<NotesScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                ],
-                for (final entry in entries) ...[
+                ]);
+              }
+              for (final entry in entries) {
+                sectionWidgets.addAll([
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
                     child: Text(
@@ -204,9 +209,11 @@ class _NotesScreenState extends State<NotesScreen> {
                       onTogglePin: _handleTogglePin,
                     ),
                   ),
-                ],
-                SizedBox(height: bottomInset + 72),
-              ] else ...[
+                ]);
+              }
+              sectionWidgets.add(SizedBox(height: bottomInset + 72));
+            } else {
+              sectionWidgets.addAll([
                 SizedBox(height: media.padding.top + 160),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -246,86 +253,85 @@ class _NotesScreenState extends State<NotesScreen> {
                   ),
                 ),
                 SizedBox(height: bottomInset + 72),
-              ],
-            ];
+              ]);
+            }
 
             return Scaffold(
-              backgroundColor: colorScheme.surfaceDim,
+              backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(gradient: backgroundGradient),
-                    child: CustomScrollView(
-                      controller: _scrollController,
-                      physics: const BouncingScrollPhysics(
-                        parent: AlwaysScrollableScrollPhysics(),
-                      ),
-                      slivers: [
-                        SliverAppBar.large(
-                          backgroundColor: Colors.transparent,
-                          surfaceTintColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          stretch: true,
-                          stretchTriggerOffset: 120,
-                          onStretchTrigger: _handleStretchTrigger,
-                          leading: IconButton(
-                            icon: const Icon(Icons.arrow_back_ios_new_rounded),
-                            onPressed: () => Navigator.of(context).maybePop(),
-                            tooltip: 'Folders',
-                          ),
-                          actions: [
-                            IconButton(
-                              icon: const Icon(Icons.more_horiz_rounded),
-                              tooltip: 'More options',
-                              onPressed: _showOverflowMenu,
-                            ),
-                          ],
-                          flexibleSpace: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final titleStyle = theme.textTheme.headlineMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700);
-                              final subtitleStyle = theme.textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: colorScheme.onSurfaceVariant,
-                                  );
-                              return FlexibleSpaceBar(
-                                titlePadding: const EdgeInsetsDirectional.only(
-                                  start: 20,
-                                  bottom: 16,
-                                ),
-                                title: Column(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('Notes', style: titleStyle),
-                                    Text(
-                                      '$totalNotes Notes',
-                                      style: subtitleStyle,
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                        SliverList(
-                          delegate: SliverChildListDelegate(sectionWidgets),
-                        ),
-                      ],
+                  CustomScrollView(
+                    controller: _scrollController,
+                    physics: const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics(),
                     ),
+                    slivers: [
+                      SliverAppBar.large(
+                        backgroundColor: Colors.black,
+                        surfaceTintColor: Colors.transparent,
+                        shadowColor: Colors.transparent,
+                        stretch: true,
+                        stretchTriggerOffset: 120,
+                        onStretchTrigger: _handleStretchTrigger,
+                        automaticallyImplyLeading: false,
+                        leading: IconButton(
+                          icon: const Icon(Icons.border_color_rounded),
+                          tooltip: 'Highlights',
+                          onPressed: _openHighlights,
+                        ),
+                        actions: [
+                          IconButton(
+                            icon: const Icon(Icons.more_horiz_rounded),
+                            tooltip: 'More options',
+                            onPressed: _showOverflowMenu,
+                          ),
+                        ],
+                        flexibleSpace: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final titleStyle = theme.textTheme.headlineMedium
+                                ?.copyWith(fontWeight: FontWeight.w700);
+                            final subtitleStyle = theme.textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Colors.grey[500],
+                                );
+                            return FlexibleSpaceBar(
+                              titlePadding: const EdgeInsetsDirectional.only(
+                                start: 20,
+                                bottom: 16,
+                              ),
+                              title: Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Notes', style: titleStyle),
+                                  Text(
+                                    '$totalNotes Notes',
+                                    style: subtitleStyle,
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      SliverList(
+                        delegate: SliverChildListDelegate(sectionWidgets),
+                      ),
+                    ],
                   ),
                   Positioned(
                     left: 0,
                     right: 0,
-                    bottom: navBarHeight + media.padding.bottom + 16,
+                    bottom: navBarHeight + media.padding.bottom + 4,
                     child: AnimatedSlide(
-                      duration: const Duration(milliseconds: 220),
+                      duration: const Duration(milliseconds: 260),
                       curve: Curves.easeOutCubic,
                       offset: _showNavChrome
                           ? Offset.zero
-                          : const Offset(0, 0.25),
+                          : const Offset(0, 0.2),
                       child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 180),
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOut,
                         opacity: _showNavChrome ? 1 : 0,
                         child: _buildBottomBar(context),
                       ),
@@ -490,36 +496,42 @@ class _NotesScreenState extends State<NotesScreen> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final searchBackground = Color.alphaBlend(
-      scheme.primary.withValues(alpha: isDark ? 0.14 : 0.08),
-      scheme.surfaceContainerHigh,
-    );
+    final searchBackground = isDark
+        ? const Color(0xFF1C1C1E).withValues(alpha: 0.2)
+        : scheme.surface.withValues(alpha: 0.85);
+    final borderColor = Colors.white.withValues(alpha: 0.12);
+    final iconColor = scheme.onSurfaceVariant.withValues(alpha: 0.7);
+
+    final media = MediaQuery.of(context);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      padding: EdgeInsets.fromLTRB(
+        24,
+        0,
+        24,
+        1 + media.viewPadding.bottom * 0.05,
+      ),
       child: Row(
         children: [
           Expanded(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: searchBackground,
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: scheme.outlineVariant.withValues(alpha: 0.18),
-                ),
-              ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: searchBackground,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: borderColor),
+                  ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 6,
+                  horizontal: 14,
+                  vertical: 4,
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.search_rounded,
-                      size: 20,
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    Icon(Icons.search_rounded, size: 18, color: iconColor),
                     const SizedBox(width: 12),
                     Expanded(
                       child: TextField(
@@ -529,12 +541,15 @@ class _NotesScreenState extends State<NotesScreen> {
                           border: InputBorder.none,
                           hintText: 'Search',
                           hintStyle: theme.textTheme.bodyMedium?.copyWith(
-                            color: scheme.onSurfaceVariant.withValues(
-                              alpha: 0.7,
-                            ),
+                            color: iconColor,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
                           ),
+                          isCollapsed: true,
+                          contentPadding: EdgeInsets.zero,
                         ),
                         textInputAction: TextInputAction.search,
+                        cursorColor: iconColor,
                       ),
                     ),
                     IconButton(
@@ -543,21 +558,36 @@ class _NotesScreenState extends State<NotesScreen> {
                       onPressed: _handleMicPressed,
                       icon: Icon(
                         Icons.mic_none_rounded,
-                        color: scheme.onSurfaceVariant,
+                        size: 18,
+                        color: iconColor,
                       ),
                     ),
                   ],
                 ),
               ),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 16),
-          FloatingActionButton(
-            heroTag: 'notes-compose',
-            onPressed: _composeNewNote,
-            backgroundColor: scheme.primaryContainer,
-            foregroundColor: scheme.onPrimaryContainer,
-            child: const Icon(Icons.edit_note_rounded),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: searchBackground,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: borderColor),
+                ),
+                child: IconButton(
+                  tooltip: 'New note',
+                  splashRadius: 22,
+                  onPressed: _composeNewNote,
+                  icon: Icon(Icons.edit_note_rounded, size: 20, color: iconColor),
+                ),
+              ),
+            ),
           ),
         ],
       ),

@@ -33,48 +33,31 @@ class NotesSectionList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-    final overlayPrimary = scheme.primary.withValues(
-      alpha: isDark ? 0.10 : 0.06,
-    );
-    final overlayOutline = scheme.outline.withValues(
-      alpha: isDark ? 0.08 : 0.04,
-    );
-    final baseHigh = scheme.surfaceContainerHighest;
-    final baseLow = scheme.surfaceContainerHigh;
-    final gradient = LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        Color.alphaBlend(
-          overlayPrimary,
-          isCompact ? scheme.surfaceContainerHigh : baseHigh,
-        ),
-        Color.alphaBlend(overlayOutline, isCompact ? scheme.surface : baseLow),
-      ],
-    );
-    final borderRadius = BorderRadius.circular(isCompact ? 20 : 24);
+    final borderRadius = BorderRadius.circular(isCompact ? 12 : 14);
     final resolvedTilePadding =
         tilePadding ??
         (isCompact
             ? const EdgeInsets.fromLTRB(18, 10, 18, 10)
             : const EdgeInsets.fromLTRB(20, 14, 20, 14));
 
+    // Apple Notes style gray cards
+    final cardColor = isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7);
+
     return Material(
       color: Colors.transparent,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: borderRadius,
-        side: BorderSide(
-          color: scheme.outlineVariant.withValues(alpha: isDark ? 0.12 : 0.08),
-        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           DecoratedBox(
-            decoration: BoxDecoration(gradient: gradient),
+            decoration: BoxDecoration(
+              color: cardColor,
+              borderRadius: borderRadius,
+            ),
             child: Column(
               children: [
                 for (var i = 0; i < notes.length; i++) ...[
@@ -99,9 +82,9 @@ class NotesSectionList extends StatelessWidget {
                       height: 1,
                       indent: isCompact ? 16 : 20,
                       endIndent: isCompact ? 16 : 20,
-                      color: scheme.outlineVariant.withValues(
-                        alpha: isDark ? 0.2 : 0.14,
-                      ),
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.black.withValues(alpha: 0.08),
                     ),
                 ],
               ],

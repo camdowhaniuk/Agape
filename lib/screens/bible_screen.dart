@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 
 import '../models/highlight.dart';
 import '../services/bible_service.dart';
@@ -66,9 +67,9 @@ class _BibleScreenState extends State<BibleScreen> {
   String _visibleBook = 'John';
   int _visibleChapter = 1;
   bool _headerVisible = true;
-  int _lastHighlightColorId = 0;
+  _ColorChoice _lastHighlightChoice = const _ColorChoice(paletteIndex: 0);
+  List<Color> _savedCustomColors = const <Color>[];
   _HighlightDraft? _activeHighlightDraft;
-  bool _highlightOverflowWarned = false;
   double _storedAlignment = 0.0;
   double _lastVisibleAlignment = 0.0;
   int? _storedVisibleVerse;
@@ -87,7 +88,9 @@ class _BibleScreenState extends State<BibleScreen> {
     final thresholdY = mediaTop + headerPadding + sectionPadding;
     final bool log = _restoringLocation;
     if (log) {
-      debugPrint('[Bible] visibleVerseInfo threshold=$thresholdY entries=${state.verseKeys.length}');
+      debugPrint(
+        '[Bible] visibleVerseInfo threshold=$thresholdY entries=${state.verseKeys.length}',
+      );
     }
 
     final entries = state.verseKeys.entries.toList()
@@ -120,12 +123,16 @@ class _BibleScreenState extends State<BibleScreen> {
       }
     }
     if (entries.isEmpty) return null;
-    final fallbackVerse = _storedVisibleVerse ?? _currentVisibleVerse ?? _selectedVerse;
+    final fallbackVerse =
+        _storedVisibleVerse ?? _currentVisibleVerse ?? _selectedVerse;
     if (fallbackVerse != null && state.verseKeys.containsKey(fallbackVerse)) {
       if (log) {
         debugPrint('[Bible] fallback stored verse=$fallbackVerse');
       }
-      return _VisibleVerseInfo(fallbackVerse, _currentVisibleAlignment ?? _storedAlignment);
+      return _VisibleVerseInfo(
+        fallbackVerse,
+        _currentVisibleAlignment ?? _storedAlignment,
+      );
     }
     final first = entries.first;
     if (log) {
@@ -343,6 +350,7 @@ class _BibleScreenState extends State<BibleScreen> {
     debugPrint('[Bible] loadInitialData start');
     await _service.loadRedLetterRanges();
     await _highlightService.ensureLoaded();
+    _syncSavedCustomColors();
     if (_hasExplicitInitialTarget) {
       _restoringLocation = false;
       _storedAlignment = 0.0;
@@ -381,7 +389,9 @@ class _BibleScreenState extends State<BibleScreen> {
     }
     _currentVisibleVerse = _storedVisibleVerse ?? _selectedVerse;
     _currentVisibleAlignment = _storedAlignment;
-    debugPrint('[Bible] restore state -> book=$_selectedBook chapter=$_selectedChapter verse=$_selectedVerse storedAlignment=$_storedAlignment storedVisible=$_storedVisibleVerse');
+    debugPrint(
+      '[Bible] restore state -> book=$_selectedBook chapter=$_selectedChapter verse=$_selectedVerse storedAlignment=$_storedAlignment storedVisible=$_storedVisibleVerse',
+    );
     _restoreTargetVerse = _storedVisibleVerse ?? _selectedVerse;
     _restoreTargetAlignment = _storedAlignment;
     return true;
@@ -428,7 +438,9 @@ class _BibleScreenState extends State<BibleScreen> {
     }
 
     final alignment = _restoreTargetAlignment ?? _storedAlignment;
-    debugPrint('[Bible] restore target verse=$targetVerse alignment=$alignment index=$index');
+    debugPrint(
+      '[Bible] restore target verse=$targetVerse alignment=$alignment index=$index',
+    );
     _scheduleVerseScrollForRef(
       ref,
       targetVerse,
@@ -441,7 +453,9 @@ class _BibleScreenState extends State<BibleScreen> {
       final state = _chapterStates[ref];
       if (state == null) return;
       final info = _visibleVerseInfo(state);
-      debugPrint('[Bible] post-restore check verse=${info?.verse} align=${info?.alignment}');
+      debugPrint(
+        '[Bible] post-restore check verse=${info?.verse} align=${info?.alignment}',
+      );
       if (info == null || info.verse != targetVerse) {
         _scheduleVerseScrollForRef(
           ref,
@@ -587,7 +601,12 @@ class _BibleScreenState extends State<BibleScreen> {
       state.verseKeys
         ..clear()
         ..addEntries(
-          data.map((v) => MapEntry((v['verse'] as num).toInt(), GlobalKey())),
+          data.map(
+            (v) => MapEntry(
+              (v['verse'] as num).toInt(),
+              GlobalKey<_VerseInlineState>(),
+            ),
+          ),
         );
       final highlightMap = await _highlightService.highlightsFor(
         ref.book,
@@ -716,7 +735,7 @@ class _BibleScreenState extends State<BibleScreen> {
     int verse,
     VerseHighlight highlight,
   ) async {
-    final action = await showModalBottomSheet<_HighlightContextAction>(
+    final selection = await showModalBottomSheet<_HighlightSelection>(
       context: context,
       backgroundColor: Theme.of(context).brightness == Brightness.dark
           ? const Color(0xFF121215)
@@ -724,7 +743,12 @@ class _BibleScreenState extends State<BibleScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) {
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        final isDark = theme.brightness == Brightness.dark;
+        final palette = highlightPalette(isDark);
+        final savedCustoms = _savedCustomColors;
+
         return SafeArea(
           top: false,
           child: Padding(
@@ -735,27 +759,189 @@ class _BibleScreenState extends State<BibleScreen> {
               children: [
                 Text(
                   'Highlight Options',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 18),
-                ListTile(
-                  leading: const Icon(Icons.color_lens_rounded),
-                  title: const Text('Change color'),
-                  onTap: () => Navigator.of(
-                    context,
-                  ).pop(_HighlightContextAction.changeColor),
+                const SizedBox(height: 14),
+                Text(
+                  'Pick a color',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.onSurface.withOpacity(0.7),
+                  ),
                 ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 70,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemBuilder: (context, index) {
+                      final color = palette[index];
+                      final selected =
+                          highlight.colorValue == null &&
+                          index == highlight.colorId;
+                      return GestureDetector(
+                        onTap: () => Navigator.of(
+                          sheetContext,
+                        ).pop(_HighlightSelection.palette(index)),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOut,
+                          width: selected ? 48 : 40,
+                          height: selected ? 48 : 40,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: selected
+                                  ? Colors.white.withOpacity(
+                                      isDark ? 0.95 : 0.85,
+                                    )
+                                  : Colors.black.withOpacity(
+                                      isDark ? 0.4 : 0.12,
+                                    ),
+                              width: selected ? 2.4 : 1.4,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(
+                                  isDark ? 0.45 : 0.18,
+                                ),
+                                blurRadius: selected ? 18 : 12,
+                                offset: const Offset(0, 8),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                    separatorBuilder: (_, __) => const SizedBox(width: 18),
+                    itemCount: palette.length,
+                  ),
+                ),
+                if (savedCustoms.isNotEmpty) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    'Saved colors',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    height: 70,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemBuilder: (context, index) {
+                        final color = savedCustoms[index];
+                        final selected =
+                            highlight.colorValue != null &&
+                            highlight.colorValue == color.value;
+                        return GestureDetector(
+                          onTap: () => Navigator.of(sheetContext).pop(
+                            _HighlightSelection.custom(
+                              paletteIndex: highlight.colorId,
+                              color: color,
+                            ),
+                          ),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOut,
+                            width: selected ? 48 : 40,
+                            height: selected ? 48 : 40,
+                            decoration: BoxDecoration(
+                              color: color,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: selected
+                                    ? Colors.white.withOpacity(
+                                        isDark ? 0.95 : 0.85,
+                                      )
+                                    : Colors.black.withOpacity(
+                                        isDark ? 0.4 : 0.12,
+                                      ),
+                                width: selected ? 2.4 : 1.4,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(
+                                    isDark ? 0.45 : 0.18,
+                                  ),
+                                  blurRadius: selected ? 18 : 12,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                      separatorBuilder: (_, __) => const SizedBox(width: 18),
+                      itemCount: savedCustoms.length,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.onSurface,
+                    side: BorderSide(
+                      color: theme.colorScheme.onSurface.withOpacity(
+                        isDark ? 0.3 : 0.2,
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 12,
+                      horizontal: 16,
+                    ),
+                  ),
+                  onPressed: () async {
+                    final initialColor = highlightColorForHighlight(
+                      highlight,
+                      dark: isDark,
+                    );
+                    final custom = await _pickCustomHighlightColor(
+                      sheetContext,
+                      initialColor,
+                      isDark,
+                    );
+                    if (custom != null) {
+                      Navigator.of(sheetContext).pop(
+                        _HighlightSelection.custom(
+                          paletteIndex: highlight.colorId,
+                          color: custom,
+                        ),
+                      );
+                    }
+                  },
+                  icon: ShaderMask(
+                    shaderCallback: (rect) => const SweepGradient(
+                      colors: [
+                        Color(0xFFFF5252),
+                        Color(0xFFFFEB3B),
+                        Color(0xFF4CAF50),
+                        Color(0xFF40C4FF),
+                        Color(0xFF7C4DFF),
+                        Color(0xFFFF5252),
+                      ],
+                    ).createShader(rect),
+                    child: const Icon(
+                      Icons.colorize_rounded,
+                      color: Colors.white,
+                    ),
+                  ),
+                  label: const Text('Color wheel'),
+                ),
+                const SizedBox(height: 12),
                 ListTile(
                   leading: const Icon(Icons.delete_outline_rounded),
                   title: const Text('Remove highlight'),
-                  onTap: () =>
-                      Navigator.of(context).pop(_HighlightContextAction.delete),
+                  onTap: () => Navigator.of(
+                    sheetContext,
+                  ).pop(const _HighlightSelection.delete()),
                 ),
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(sheetContext).pop(),
                   child: const Text('Cancel'),
                 ),
               ],
@@ -765,73 +951,113 @@ class _BibleScreenState extends State<BibleScreen> {
       },
     );
 
-    if (action == null) return;
+    if (selection == null) return;
 
     final ref = _ChapterRef(book: book, chapter: chapter);
     final state = _chapterStates[ref];
     if (state == null) return;
-    final existing = List<VerseHighlight>.from(
-      state.highlights[verse] ?? const <VerseHighlight>[],
-    );
-    final index = existing.indexWhere(
-      (h) => h.start == highlight.start && h.end == highlight.end,
-    );
-    if (index == -1) return;
+    final spanId = highlight.spanId;
+    final span = await _highlightService.highlightById(book, chapter, spanId);
+    if (span == null) return;
 
-    switch (action) {
-      case _HighlightContextAction.changeColor:
-        final newColor = await _pickHighlightColor(context, highlight.colorId);
-        if (!mounted) return;
-        if (newColor == null || newColor == highlight.colorId) {
-          return;
-        }
-        existing[index] = highlight.copyWith(colorId: newColor);
-        state.highlights[verse] = existing;
-        _lastHighlightColorId = newColor;
-        setState(() {});
-        await _highlightService.setVerseHighlights(
-          book,
-          chapter,
-          verse,
-          existing,
-        );
-        break;
-      case _HighlightContextAction.delete:
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              title: const Text('Remove highlight?'),
-              content: Text('Delete the highlight for $book $chapter:$verse?'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('Delete'),
-                ),
-              ],
-            );
-          },
-        );
-        if (confirm != true) return;
-        existing.removeAt(index);
-        if (existing.isEmpty) {
-          state.highlights.remove(verse);
-        } else {
-          state.highlights[verse] = existing;
-        }
-        setState(() {});
-        await _highlightService.setVerseHighlights(
-          book,
-          chapter,
-          verse,
-          existing,
-        );
-        break;
+    if (selection.delete) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          final verses = span.portions.map((p) => p.verse).toList()..sort();
+          final reference = verses.isEmpty
+              ? '$book $chapter'
+              : verses.length == 1
+              ? '$book $chapter:${verses.single}'
+              : '$book $chapter:${verses.first}-${verses.last}';
+          return AlertDialog(
+            title: const Text('Remove highlight?'),
+            content: Text('Delete the highlight for $reference?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Delete'),
+              ),
+            ],
+          );
+        },
+      );
+      if (confirm != true) return;
+      await _highlightService.removeHighlight(
+        book: book,
+        chapter: chapter,
+        spanId: spanId,
+      );
+    } else {
+      final paletteIndex = selection.paletteIndex ?? span.colorId;
+      final customColor = selection.customColor;
+      final bool colorUnchanged =
+          paletteIndex == span.colorId &&
+          ((customColor == null && span.colorValue == null) ||
+              (customColor != null &&
+                  span.colorValue != null &&
+                  customColor.value == span.colorValue));
+      if (colorUnchanged) return;
+      await _highlightService.updateHighlightColor(
+        book: book,
+        chapter: chapter,
+        spanId: spanId,
+        colorId: paletteIndex,
+        customColorValue: customColor?.value,
+      );
+      _lastHighlightChoice = _ColorChoice(
+        paletteIndex: paletteIndex,
+        customColor: customColor,
+      );
     }
+
+    await _reloadHighlightsForState(ref, state);
+    _syncSavedCustomColors();
+  }
+
+  Future<Color?> _pickCustomHighlightColor(
+    BuildContext context,
+    Color initial,
+    bool isDark,
+  ) async {
+    Color tempColor = initial;
+    return showDialog<Color>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: isDark ? const Color(0xFF121215) : Colors.white,
+          title: const Text('Pick a highlight color'),
+          content: StatefulBuilder(
+            builder: (context, setState) {
+              return ColorPicker(
+                pickerColor: tempColor,
+                onColorChanged: (color) => setState(() => tempColor = color),
+                enableAlpha: false,
+                displayThumbColor: true,
+                paletteType: PaletteType.hsvWithHue,
+                pickerAreaBorderRadius: const BorderRadius.all(
+                  Radius.circular(12),
+                ),
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(tempColor),
+              child: const Text('Use color'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _handleHighlightDragStart(
@@ -843,23 +1069,21 @@ class _BibleScreenState extends State<BibleScreen> {
     final ref = _ChapterRef(book: book, chapter: chapter);
     final state = _chapterStates[ref];
     if (state == null) return;
-    final verseText = _verseTextFor(state, verse);
-    if (verseText == null || verseText.isEmpty) return;
-    final length = verseText.length;
-    final startOffset = _clampOffset(offset, length);
-    final originals = List<VerseHighlight>.from(
-      state.highlights[verse] ?? const <VerseHighlight>[],
-    );
-    state.highlights[verse] = originals;
-    _highlightOverflowWarned = false;
+    final verseLength = _verseLength(state, verse);
+    if (verseLength == 0) return;
+    final startOffset = _clampOffset(offset, verseLength);
+    final original = <int, List<VerseHighlight>>{};
+    state.highlights.forEach((key, value) {
+      original[key] = List<VerseHighlight>.from(value);
+    });
+    original.putIfAbsent(verse, () => <VerseHighlight>[]);
     _activeHighlightDraft = _HighlightDraft(
       ref: ref,
-      verse: verse,
-      textLength: length,
-      start: startOffset,
-      end: startOffset,
-      originalHighlights: originals,
+      startVerse: verse,
+      startOffset: startOffset,
+      originalHighlights: original,
     );
+    _restoreHighlightsFromMap(state, original);
     if (mounted) setState(() {});
   }
 
@@ -869,31 +1093,29 @@ class _BibleScreenState extends State<BibleScreen> {
     int verse,
     int startOffset,
     int currentOffset,
+    Offset globalPosition,
   ) {
     final draft = _activeHighlightDraft;
     if (draft == null) return;
-    if (draft.ref.book != book ||
-        draft.ref.chapter != chapter ||
-        draft.verse != verse) {
+    if (draft.ref.book != book || draft.ref.chapter != chapter) {
       return;
     }
     final state = _chapterStates[draft.ref];
     if (state == null) return;
-    draft.start = _clampOffset(startOffset, draft.textLength);
-    final clampedEnd = _clampOffset(currentOffset, draft.textLength);
-    if (currentOffset > draft.textLength && !_highlightOverflowWarned) {
-      _highlightOverflowWarned = true;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(milliseconds: 1800),
-            content: Text('Highlights stay within a single verse.'),
-          ),
+    final target =
+        _edgeForPosition(state, globalPosition) ??
+        _VerseEdge(
+          verse: verse,
+          offset: _clampOffset(currentOffset, _verseLength(state, verse)),
         );
-      }
-    }
-    draft.end = clampedEnd;
-    _applyHighlightPreview(draft, _lastHighlightColorId, state);
+
+    draft.currentVerse = target.verse;
+    draft.currentOffset = _clampOffset(
+      target.offset,
+      _verseLength(state, target.verse),
+    );
+    _applyHighlightPreview(draft, _lastHighlightChoice, state);
+    if (mounted) setState(() {});
   }
 
   Future<void> _handleHighlightDragEnd(
@@ -902,12 +1124,11 @@ class _BibleScreenState extends State<BibleScreen> {
     int verse,
     int startOffset,
     int endOffset,
+    Offset globalPosition,
   ) async {
     final draft = _activeHighlightDraft;
     if (draft == null) return;
-    if (draft.ref.book != book ||
-        draft.ref.chapter != chapter ||
-        draft.verse != verse) {
+    if (draft.ref.book != book || draft.ref.chapter != chapter) {
       _activeHighlightDraft = null;
       return;
     }
@@ -916,149 +1137,220 @@ class _BibleScreenState extends State<BibleScreen> {
       _activeHighlightDraft = null;
       return;
     }
-    draft.start = _clampOffset(startOffset, draft.textLength);
-    draft.end = _clampOffset(endOffset, draft.textLength);
-    final start = draft.normalizedStart;
-    final end = draft.normalizedEnd;
-    if (end <= start) {
-      state.highlights[draft.verse] = draft.originalHighlights;
+    final target =
+        _edgeForPosition(state, globalPosition) ??
+        _VerseEdge(
+          verse: verse,
+          offset: _clampOffset(endOffset, _verseLength(state, verse)),
+        );
+
+    draft.currentVerse = target.verse;
+    draft.currentOffset = _clampOffset(
+      target.offset,
+      _verseLength(state, target.verse),
+    );
+
+    if (!draft.hasSelection) {
+      _restoreHighlightsFromMap(state, draft.originalHighlights);
       _activeHighlightDraft = null;
-      _highlightOverflowWarned = false;
       if (mounted) setState(() {});
       return;
     }
 
-    _applyHighlightPreview(draft, _lastHighlightColorId, state);
+    final startEdge = draft.minEdge;
+    final endEdge = draft.maxEdge;
+    final choice = _lastHighlightChoice;
+    final portions = <HighlightPortion>[];
+    final excerptBuffer = StringBuffer();
 
-    final selectedColor = _lastHighlightColorId;
-    final verseText = _verseTextFor(state, verse);
-    String? excerpt;
-    if (verseText != null && verseText.isNotEmpty) {
-      final clampedEnd = end > verseText.length ? verseText.length : end;
-      if (clampedEnd > start && start < verseText.length) {
-        excerpt = verseText.substring(start, clampedEnd).trim();
-        if (excerpt.isEmpty) {
-          excerpt = null;
-        }
+    for (final verseNumber in _versesBetween(startEdge.verse, endEdge.verse)) {
+      final verseText = _verseTextFor(state, verseNumber);
+      if (verseText == null || verseText.isEmpty) continue;
+      final length = verseText.length;
+      var verseStart = verseNumber == startEdge.verse ? startEdge.offset : 0;
+      var verseEnd = verseNumber == endEdge.verse ? endEdge.offset : length;
+      verseStart = _clampOffset(verseStart, length);
+      verseEnd = _clampOffset(verseEnd, length);
+      if (verseEnd <= verseStart) continue;
+
+      portions.add(
+        HighlightPortion(verse: verseNumber, start: verseStart, end: verseEnd),
+      );
+
+      final excerpt = _excerptForRange(verseText, verseStart, verseEnd);
+      if (excerpt != null) {
+        if (excerptBuffer.isNotEmpty) excerptBuffer.write(' ');
+        excerptBuffer.write(excerpt);
       }
     }
-    final updated = List<VerseHighlight>.from(draft.originalHighlights)
-      ..add(
-        VerseHighlight(
-          colorId: selectedColor,
-          start: start,
-          end: end,
-          excerpt: excerpt,
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-        ),
-      )
-      ..sort((a, b) => a.start.compareTo(b.start));
 
-    state.highlights[draft.verse] = updated;
-    _activeHighlightDraft = null;
-    _highlightOverflowWarned = false;
-    setState(() {});
+    if (portions.isEmpty) {
+      _restoreHighlightsFromMap(state, draft.originalHighlights);
+      _activeHighlightDraft = null;
+      if (mounted) setState(() {});
+      return;
+    }
 
-    await _highlightService.setVerseHighlights(
-      draft.ref.book,
-      draft.ref.chapter,
-      draft.verse,
-      updated,
-    );
+    try {
+      final excerpt = excerptBuffer.toString().trim();
+      await _highlightService.addHighlight(
+        book: draft.ref.book,
+        chapter: draft.ref.chapter,
+        portions: portions,
+        colorId: choice.paletteIndex,
+        colorValue: choice.customColor?.value,
+        excerpt: excerpt.isEmpty ? null : excerpt,
+      );
+      _activeHighlightDraft = null;
+      await _reloadHighlightsForState(draft.ref, state);
+      _syncSavedCustomColors();
+    } catch (_) {
+      _restoreHighlightsFromMap(state, draft.originalHighlights);
+      _activeHighlightDraft = null;
+      if (mounted) setState(() {});
+    }
   }
 
   void _applyHighlightPreview(
     _HighlightDraft draft,
-    int colorId,
+    _ColorChoice choice,
     _ChapterState state,
   ) {
-    final start = draft.normalizedStart;
-    final end = draft.normalizedEnd;
-    final base = List<VerseHighlight>.from(draft.originalHighlights);
-    if (end <= start) {
-      state.highlights[draft.verse] = base;
-    } else {
-      base.add(VerseHighlight(colorId: colorId, start: start, end: end));
-      state.highlights[draft.verse] = base;
+    final updated = draft.cloneOriginals();
+    if (!draft.hasSelection) {
+      _restoreHighlightsFromMap(state, updated);
+      return;
     }
+
+    final startEdge = draft.minEdge;
+    final endEdge = draft.maxEdge;
+
+    for (final verseNumber in _versesBetween(startEdge.verse, endEdge.verse)) {
+      final verseText = _verseTextFor(state, verseNumber);
+      if (verseText == null || verseText.isEmpty) continue;
+      final length = verseText.length;
+      var verseStart = verseNumber == startEdge.verse ? startEdge.offset : 0;
+      var verseEnd = verseNumber == endEdge.verse ? endEdge.offset : length;
+      verseStart = _clampOffset(verseStart, length);
+      verseEnd = _clampOffset(verseEnd, length);
+      if (verseEnd <= verseStart) continue;
+
+      final list = List<VerseHighlight>.from(updated[verseNumber] ?? const []);
+      list.add(
+        VerseHighlight(
+          spanId: draft.previewSpanId,
+          colorId: choice.paletteIndex,
+          colorValue: choice.customColor?.value,
+          start: verseStart,
+          end: verseEnd,
+        ),
+      );
+      list.sort((a, b) => a.start.compareTo(b.start));
+      updated[verseNumber] = list;
+    }
+
+    _restoreHighlightsFromMap(state, updated);
+  }
+
+  void _restoreHighlightsFromMap(
+    _ChapterState state,
+    Map<int, List<VerseHighlight>> source,
+  ) {
+    state.highlights
+      ..clear()
+      ..addEntries(
+        source.entries
+            .where((entry) => entry.value.isNotEmpty)
+            .map(
+              (entry) =>
+                  MapEntry(entry.key, List<VerseHighlight>.from(entry.value)),
+            ),
+      );
+  }
+
+  Future<void> _reloadHighlightsForState(
+    _ChapterRef ref,
+    _ChapterState state,
+  ) async {
+    final refreshed = await _highlightService.highlightsFor(
+      ref.book,
+      ref.chapter,
+    );
+    _restoreHighlightsFromMap(state, refreshed);
     if (mounted) setState(() {});
   }
 
-  Future<int?> _pickHighlightColor(
-    BuildContext sheetContext,
-    int initialColorId,
-  ) {
-    final isDark = Theme.of(sheetContext).brightness == Brightness.dark;
-    final colors = highlightPalette(isDark);
-    return showModalBottomSheet<int>(
-      context: sheetContext,
-      backgroundColor: isDark ? const Color(0xFF121215) : Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Highlight Color',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Wrap(
-                  spacing: 18,
-                  runSpacing: 14,
-                  children: List.generate(colors.length, (index) {
-                    final color = colors[index];
-                    final isSelected = index == initialColorId;
-                    return GestureDetector(
-                      onTap: () => Navigator.of(context).pop(index),
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: color,
-                          borderRadius: BorderRadius.circular(24),
-                          border: isSelected
-                              ? Border.all(
-                                  color: isDark
-                                      ? Colors.white.withOpacity(0.8)
-                                      : Colors.black.withOpacity(0.78),
-                                  width: 2.4,
-                                )
-                              : null,
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(
-                                isDark ? 0.45 : 0.18,
-                              ),
-                              blurRadius: 14,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 20),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  int _verseLength(_ChapterState state, int verse) {
+    final text = _verseTextFor(state, verse);
+    return text?.length ?? 0;
+  }
+
+  Iterable<int> _versesBetween(int startVerse, int endVerse) sync* {
+    final lower = startVerse <= endVerse ? startVerse : endVerse;
+    final upper = startVerse <= endVerse ? endVerse : startVerse;
+    for (var verseNumber = lower; verseNumber <= upper; verseNumber++) {
+      yield verseNumber;
+    }
+  }
+
+  _VerseEdge? _edgeForPosition(_ChapterState state, Offset globalPosition) {
+    final infos = <_VerseLayoutInfo>[];
+    state.verseKeys.forEach((verse, key) {
+      final ctx = key.currentContext;
+      final renderBox = ctx?.findRenderObject() as RenderBox?;
+      if (renderBox == null || !renderBox.hasSize) return;
+      final topLeft = renderBox.localToGlobal(Offset.zero);
+      infos.add(
+        _VerseLayoutInfo(
+          verse: verse,
+          top: topLeft.dy,
+          bottom: topLeft.dy + renderBox.size.height,
+          state: key.currentState,
+        ),
+      );
+    });
+    if (infos.isEmpty) return null;
+    infos.sort((a, b) => a.verse.compareTo(b.verse));
+
+    if (globalPosition.dy <= infos.first.top) {
+      return _VerseEdge(verse: infos.first.verse, offset: 0);
+    }
+
+    for (final info in infos) {
+      if (globalPosition.dy < info.top) {
+        return _VerseEdge(verse: info.verse, offset: 0);
+      }
+      if (globalPosition.dy <= info.bottom) {
+        final verseState = info.state;
+        if (verseState != null) {
+          final offset = verseState.offsetForGlobalPosition(globalPosition);
+          return _VerseEdge(verse: info.verse, offset: offset);
+        }
+        return _VerseEdge(verse: info.verse, offset: 0);
+      }
+    }
+
+    final last = infos.last;
+    final length = _verseLength(state, last.verse);
+    return _VerseEdge(verse: last.verse, offset: length);
+  }
+
+  String? _excerptForRange(String verseText, int start, int end) {
+    if (verseText.isEmpty) return null;
+    final safeEnd = _clampOffset(end, verseText.length);
+    final safeStart = _clampOffset(start, verseText.length);
+    if (safeEnd <= safeStart) return null;
+    final excerpt = verseText.substring(safeStart, safeEnd).trim();
+    return excerpt.isEmpty ? null : excerpt;
+  }
+
+  void _syncSavedCustomColors() {
+    final values = _highlightService.customColors;
+    final colors = values.map((value) => Color(value)).toList(growable: false);
+    if (!mounted) return;
+    setState(() {
+      _savedCustomColors = colors;
+    });
   }
 
   Future<_USFMBookData?> _ensureUsfmBookData(String book) async {
@@ -1240,8 +1532,11 @@ class _BibleScreenState extends State<BibleScreen> {
       }
     }
 
-    if (_restoreTargetVerse == null || _currentVisibleVerse == _restoreTargetVerse) {
-      debugPrint('[Bible] save alignment -> verse=$_currentVisibleVerse align=$_currentVisibleAlignment');
+    if (_restoreTargetVerse == null ||
+        _currentVisibleVerse == _restoreTargetVerse) {
+      debugPrint(
+        '[Bible] save alignment -> verse=$_currentVisibleVerse align=$_currentVisibleAlignment',
+      );
       _saveLastLocation(alignment: _currentVisibleAlignment);
     }
 
@@ -1296,7 +1591,9 @@ class _BibleScreenState extends State<BibleScreen> {
     }
 
     final alignment = _storedAlignment.clamp(0.0, 1.0);
-    debugPrint('[Bible] jumpToInitialPosition -> index=$_initialListIndex alignment=$alignment book=$_selectedBook chapter=$_selectedChapter verse=$_selectedVerse');
+    debugPrint(
+      '[Bible] jumpToInitialPosition -> index=$_initialListIndex alignment=$alignment book=$_selectedBook chapter=$_selectedChapter verse=$_selectedVerse',
+    );
     _itemScrollController.jumpTo(index: _initialListIndex);
     if (alignment != 0.0) {
       _itemScrollController.scrollTo(
@@ -1659,7 +1956,7 @@ class _ChapterInlineText extends StatelessWidget {
   final TextStyle baseStyle;
   final TextStyle redStyle;
   final List<Map<String, dynamic>> verses;
-  final Map<int, GlobalKey> verseKeys;
+  final Map<int, GlobalKey<_VerseInlineState>> verseKeys;
   final int? selectedVerse;
   final String selectedBook;
   final _VerseSpanBuilder spanBuilder;
@@ -1675,6 +1972,7 @@ class _ChapterInlineText extends StatelessWidget {
     int verse,
     int startOffset,
     int currentOffset,
+    Offset globalPosition,
   )?
   onHighlightUpdate;
   final Future<void> Function(
@@ -1683,6 +1981,7 @@ class _ChapterInlineText extends StatelessWidget {
     int verse,
     int startOffset,
     int endOffset,
+    Offset globalPosition,
   )?
   onHighlightEnd;
   final void Function(
@@ -1774,22 +2073,25 @@ class _ChapterInlineText extends StatelessWidget {
                       onHighlightStart!(book, chapter, verseNum, offset),
             onHighlightUpdate: onHighlightUpdate == null
                 ? null
-                : (startOffset, currentOffset) => onHighlightUpdate!(
-                    book,
-                    chapter,
-                    verseNum,
-                    startOffset,
-                    currentOffset,
-                  ),
+                : (startOffset, currentOffset, globalPosition) =>
+                      onHighlightUpdate!(
+                        book,
+                        chapter,
+                        verseNum,
+                        startOffset,
+                        currentOffset,
+                        globalPosition,
+                      ),
             onHighlightEnd: onHighlightEnd == null
                 ? null
-                : (startOffset, endOffset) {
+                : (startOffset, endOffset, globalPosition) {
                     onHighlightEnd!(
                       book,
                       chapter,
                       verseNum,
                       startOffset,
                       endOffset,
+                      globalPosition,
                     );
                   },
             onHighlightTap: onHighlightTap == null
@@ -1875,13 +2177,14 @@ class _ChapterInlineText extends StatelessWidget {
   ) {
     if (highlights.isEmpty) return spans;
 
+    final bool dark = isDark;
     final sorted = List<VerseHighlight>.from(highlights)
       ..sort((a, b) => a.start.compareTo(b.start));
 
     Color? colorAt(int position) {
       for (final h in sorted) {
         if (position >= h.start && position < h.end) {
-          return highlightColorForId(h.colorId, dark: isDark);
+          return highlightColorForHighlight(h, dark: dark);
         }
       }
       return null;
@@ -1972,8 +2275,14 @@ class _VerseInline extends StatefulWidget {
   final double lineHeight;
   final List<VerseHighlight> verseHighlights;
   final void Function(int offset)? onHighlightStart;
-  final void Function(int startOffset, int currentOffset)? onHighlightUpdate;
-  final void Function(int startOffset, int endOffset)? onHighlightEnd;
+  final void Function(
+    int startOffset,
+    int currentOffset,
+    Offset globalPosition,
+  )?
+  onHighlightUpdate;
+  final void Function(int startOffset, int endOffset, Offset globalPosition)?
+  onHighlightEnd;
   final void Function(VerseHighlight highlight)? onHighlightTap;
 
   @override
@@ -1982,6 +2291,7 @@ class _VerseInline extends StatefulWidget {
 
 class _VerseInlineState extends State<_VerseInline> {
   int? _dragStartOffset;
+  Offset? _lastGlobalPosition;
 
   TextSpan _buildRichTextSpan(TextStyle numberStyle) {
     return TextSpan(
@@ -2018,12 +2328,40 @@ class _VerseInlineState extends State<_VerseInline> {
     return offset;
   }
 
+  TextStyle _numberStyle(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return widget.baseStyle.copyWith(
+      fontSize: (widget.baseStyle.fontSize ?? 18) * 0.6,
+      color: isDark ? Colors.purple[200] : Colors.purple,
+      fontWeight: FontWeight.bold,
+      height: 1.0,
+    );
+  }
+
+  int offsetForGlobalPosition(Offset globalPosition) {
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) {
+      return widget.verseText.length;
+    }
+    final local = renderBox.globalToLocal(globalPosition);
+    final numberStyle = _numberStyle(context);
+    return _offsetForPosition(local, numberStyle);
+  }
+
+  Offset _fallbackGlobalPosition() {
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return Offset.zero;
+    final center = renderBox.size.center(Offset.zero);
+    return renderBox.localToGlobal(center);
+  }
+
   void _handleLongPressStart(
     LongPressStartDetails details,
     TextStyle numberStyle,
   ) {
     final offset = _offsetForPosition(details.localPosition, numberStyle);
     _dragStartOffset = offset;
+    _lastGlobalPosition = details.globalPosition;
     widget.onHighlightStart?.call(offset);
   }
 
@@ -2034,7 +2372,8 @@ class _VerseInlineState extends State<_VerseInline> {
     final start = _dragStartOffset;
     if (start == null) return;
     final current = _offsetForPosition(details.localPosition, numberStyle);
-    widget.onHighlightUpdate?.call(start, current);
+    _lastGlobalPosition = details.globalPosition;
+    widget.onHighlightUpdate?.call(start, current, details.globalPosition);
   }
 
   void _handleLongPressEnd(LongPressEndDetails details, TextStyle numberStyle) {
@@ -2042,14 +2381,18 @@ class _VerseInlineState extends State<_VerseInline> {
     if (start == null) return;
     final end = _offsetForPosition(details.localPosition, numberStyle);
     _dragStartOffset = null;
-    widget.onHighlightEnd?.call(start, end);
+    _lastGlobalPosition = details.globalPosition;
+    widget.onHighlightEnd?.call(start, end, details.globalPosition);
+    _lastGlobalPosition = null;
   }
 
   void _handleLongPressCancel() {
     final start = _dragStartOffset;
     if (start == null) return;
     _dragStartOffset = null;
-    widget.onHighlightEnd?.call(start, start);
+    final global = _lastGlobalPosition ?? _fallbackGlobalPosition();
+    _lastGlobalPosition = null;
+    widget.onHighlightEnd?.call(start, start, global);
   }
 
   VerseHighlight? _highlightAtOffset(int offset) {
@@ -2078,12 +2421,7 @@ class _VerseInlineState extends State<_VerseInline> {
               ? Colors.white.withOpacity(0.1)
               : Colors.amber[100]?.withOpacity(0.45))
         : null;
-    final numberStyle = widget.baseStyle.copyWith(
-      fontSize: (widget.baseStyle.fontSize ?? 18) * 0.6,
-      color: isDark ? Colors.purple[200] : Colors.purple,
-      fontWeight: FontWeight.bold,
-      height: 1.0,
-    );
+    final numberStyle = _numberStyle(context);
 
     final richTextSpan = _buildRichTextSpan(numberStyle);
 
@@ -2099,7 +2437,8 @@ class _VerseInlineState extends State<_VerseInline> {
               _handleLongPressStart(details, numberStyle),
           onLongPressMoveUpdate: (details) =>
               _handleLongPressMove(details, numberStyle),
-          onLongPressEnd: (details) => _handleLongPressEnd(details, numberStyle),
+          onLongPressEnd: (details) =>
+              _handleLongPressEnd(details, numberStyle),
           onLongPressCancel: _handleLongPressCancel,
           onTapUp: (details) => _handleTapUp(details, numberStyle),
           child: SizedBox(
@@ -2113,10 +2452,7 @@ class _VerseInlineState extends State<_VerseInline> {
                 horizontal: widget.isSelected ? 6 : 0,
                 vertical: widget.isSelected ? 2 : 0,
               ),
-              child: RichText(
-                text: richTextSpan,
-                softWrap: true,
-              ),
+              child: RichText(text: richTextSpan, softWrap: true),
             ),
           ),
         );
@@ -2125,37 +2461,124 @@ class _VerseInlineState extends State<_VerseInline> {
   }
 }
 
+class _VerseLayoutInfo {
+  _VerseLayoutInfo({
+    required this.verse,
+    required this.top,
+    required this.bottom,
+    required this.state,
+  });
+
+  final int verse;
+  final double top;
+  final double bottom;
+  final _VerseInlineState? state;
+}
+
 class _HighlightDraft {
   _HighlightDraft({
     required this.ref,
-    required this.verse,
-    required this.textLength,
-    required this.start,
-    required this.end,
-    required this.originalHighlights,
-  });
+    required this.startVerse,
+    required this.startOffset,
+    required Map<int, List<VerseHighlight>> originalHighlights,
+    String? previewSpanId,
+  }) : currentVerse = startVerse,
+       currentOffset = startOffset,
+       previewSpanId =
+           previewSpanId ??
+           '_draft_${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}',
+       originalHighlights = originalHighlights.map(
+         (key, value) => MapEntry(key, List<VerseHighlight>.from(value)),
+       );
 
   final _ChapterRef ref;
-  final int verse;
-  final int textLength;
-  int start;
-  int end;
-  final List<VerseHighlight> originalHighlights;
+  final int startVerse;
+  final int startOffset;
+  int currentVerse;
+  int currentOffset;
+  final String previewSpanId;
+  final Map<int, List<VerseHighlight>> originalHighlights;
 
-  int get normalizedStart => start <= end ? start : end;
-  int get normalizedEnd => start <= end ? end : start;
+  _VerseEdge get startEdge =>
+      _VerseEdge(verse: startVerse, offset: startOffset);
+
+  _VerseEdge get currentEdge =>
+      _VerseEdge(verse: currentVerse, offset: currentOffset);
+
+  _VerseEdge get minEdge =>
+      startEdge.compareTo(currentEdge) <= 0 ? startEdge : currentEdge;
+
+  _VerseEdge get maxEdge =>
+      startEdge.compareTo(currentEdge) <= 0 ? currentEdge : startEdge;
+
+  bool get hasSelection {
+    final min = minEdge;
+    final max = maxEdge;
+    if (min.verse == max.verse) {
+      return max.offset > min.offset;
+    }
+    return true;
+  }
+
+  Map<int, List<VerseHighlight>> cloneOriginals() {
+    final clone = <int, List<VerseHighlight>>{};
+    originalHighlights.forEach((key, value) {
+      clone[key] = List<VerseHighlight>.from(value);
+    });
+    return clone;
+  }
 }
 
-enum _HighlightContextAction { changeColor, delete }
+class _VerseEdge {
+  const _VerseEdge({required this.verse, required this.offset});
+
+  final int verse;
+  final int offset;
+
+  int compareTo(_VerseEdge other) {
+    final verseCompare = verse.compareTo(other.verse);
+    if (verseCompare != 0) return verseCompare;
+    return offset.compareTo(other.offset);
+  }
+}
+
+class _ColorChoice {
+  const _ColorChoice({required this.paletteIndex, this.customColor});
+
+  final int paletteIndex;
+  final Color? customColor;
+}
+
+class _HighlightSelection {
+  const _HighlightSelection._({
+    this.paletteIndex,
+    this.customColor,
+    this.delete = false,
+  });
+
+  const _HighlightSelection.palette(int paletteIndex)
+    : this._(paletteIndex: paletteIndex);
+
+  const _HighlightSelection.custom({
+    required int paletteIndex,
+    required Color color,
+  }) : this._(paletteIndex: paletteIndex, customColor: color);
+
+  const _HighlightSelection.delete() : this._(delete: true);
+
+  final int? paletteIndex;
+  final Color? customColor;
+  final bool delete;
+}
 
 class _ChapterState {
   List<Map<String, dynamic>>? verses;
   Set<int> redVerses = const <int>{};
+  final Map<int, GlobalKey<_VerseInlineState>> verseKeys = {};
+  final Map<int, List<VerseHighlight>> highlights = {};
   bool isLoading = false;
   String? error;
-  final Map<int, GlobalKey> verseKeys = {};
   bool jesusSpeakingOpenQuote = false;
-  final Map<int, List<VerseHighlight>> highlights = {};
 }
 
 class _VisibleVerseInfo {

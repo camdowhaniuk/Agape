@@ -3,6 +3,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../services/ai_conversation.dart';
 import '../services/ai_conversation_store.dart';
 import '../services/ai_service.dart';
+import '../services/user_state_service.dart';
 import '../utils/scripture_reference.dart';
 import 'bible_screen.dart';
 import '../widgets/app_logo.dart';
@@ -15,12 +16,14 @@ class AIScreen extends StatefulWidget {
     this.navVisible = true,
     this.activationTick = 0,
     this.navVisibilityResetTick = 0,
+    this.onReferenceTap,
   });
 
   final void Function(bool)? onScrollVisibilityChange;
   final bool navVisible;
   final int activationTick;
   final int navVisibilityResetTick;
+  final void Function(ScriptureReference reference)? onReferenceTap;
 
   @override
   State<AIScreen> createState() => _AIScreenState();
@@ -28,7 +31,8 @@ class AIScreen extends StatefulWidget {
 
 class _AIScreenState extends State<AIScreen> {
   static const String _assistantName = 'Agape';
-  static const double _navOverlayHeight = 58;
+  static const double _navOverlayHeight = 72;
+  static const String _lastConversationStorageKey = 'ai.lastConversationId';
 
   static const String _systemPrompt =
       'You are the absolute best Bible theologian-teacher. Interpret Scripture with humility, '
@@ -41,6 +45,7 @@ class _AIScreenState extends State<AIScreen> {
 
   late final AIService _service = AIService(systemPrompt: _systemPrompt);
   final AIConversationStore _store = AIConversationStore();
+  final UserStateService _userStateService = UserStateService.instance;
   final List<AIMessage> _messages = [];
   List<AIConversation> _conversations = const <AIConversation>[];
   String? _activeConversationId;
@@ -75,6 +80,11 @@ class _AIScreenState extends State<AIScreen> {
 
   Future<void> _loadConversations() async {
     final conversations = await _store.loadAll();
+    final storedId =
+        (await _userStateService.readString(_lastConversationStorageKey))
+            ?.trim();
+    final preferId =
+        (storedId != null && storedId.isNotEmpty) ? storedId : _activeConversationId;
     if (!mounted) return;
     if (conversations.isEmpty) {
       final created = await _store.create();
@@ -86,11 +96,12 @@ class _AIScreenState extends State<AIScreen> {
           ..clear()
           ..addAll(created.messages);
       });
+      await _persistLastConversationId(created.id);
       return;
     }
     final active = _resolveActive(
       conversations,
-      preferId: _activeConversationId,
+      preferId: preferId,
     );
     setState(() {
       _conversations = conversations;
@@ -99,6 +110,9 @@ class _AIScreenState extends State<AIScreen> {
         ..clear()
         ..addAll(active?.messages ?? const <AIMessage>[]);
     });
+    if (active != null) {
+      await _persistLastConversationId(active.id);
+    }
     if (_messages.isNotEmpty) {
       _jumpToBottomSoon();
     }
@@ -129,6 +143,11 @@ class _AIScreenState extends State<AIScreen> {
       }
     }
     return conversations.first;
+  }
+
+  Future<void> _persistLastConversationId(String id) {
+    if (id.isEmpty) return Future.value();
+    return _userStateService.writeString(_lastConversationStorageKey, id);
   }
 
   Future<void> _persistActiveConversation() async {
@@ -332,6 +351,9 @@ class _AIScreenState extends State<AIScreen> {
         ..clear()
         ..addAll(active?.messages ?? const <AIMessage>[]);
     });
+    if (active != null) {
+      await _persistLastConversationId(active.id);
+    }
     if (_messages.isNotEmpty) {
       _jumpToBottomSoon();
     }
@@ -661,9 +683,12 @@ class _AIScreenState extends State<AIScreen> {
     final isDark = theme.brightness == Brightness.dark;
     final media = MediaQuery.of(context);
     final double bottomInset = media.padding.bottom;
+    final double navBottomPadding = bottomInset * 0.5 + 6;
     final double keyboardInset = media.viewInsets.bottom;
     final double navPadding = widget.navVisible ? _navOverlayHeight : 0;
-    final double navAwarePadding = navPadding + bottomInset;
+    final double navAwarePadding = widget.navVisible
+        ? _navOverlayHeight + navBottomPadding
+        : bottomInset;
     const double floatingComposerHeight = 58;
     final bool showComposer =
         _composerFocused || _chromeVisible || keyboardInset > 0;
@@ -694,26 +719,36 @@ class _AIScreenState extends State<AIScreen> {
               topPadding: listTopPadding,
             ),
           ),
-          AnimatedPositioned(
-            left: 16,
-            right: 16,
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-            bottom: showComposer
-                ? composerBottomInset
-                : -(floatingComposerHeight + 24),
-            child: IgnorePointer(
-              ignoring: !showComposer && keyboardInset <= 0,
-              child: AnimatedOpacity(
-                opacity: showComposer ? 1 : 0,
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOutCubic,
-                child: _FloatingComposer(
-                  controller: _controller,
-                  isDark: isDark,
-                  sending: _sending,
-                  onSend: _send,
-                  onFocusChange: _handleComposerFocus,
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: AnimatedPadding(
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                composerBottomInset,
+              ),
+              child: IgnorePointer(
+                ignoring: !showComposer && keyboardInset <= 0,
+                child: AnimatedSlide(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
+                  offset:
+                      showComposer ? Offset.zero : const Offset(0, 0.25),
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    opacity: showComposer ? 1 : 0,
+                    child: _FloatingComposer(
+                      controller: _controller,
+                      isDark: isDark,
+                      sending: _sending,
+                      onSend: _send,
+                      onFocusChange: _handleComposerFocus,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -808,6 +843,7 @@ class _AIScreenState extends State<AIScreen> {
             fromUser: m.role == AIRole.user,
             timestamp: m.timestamp,
             assistantName: _assistantName,
+            onReferenceTap: widget.onReferenceTap,
           );
         },
       ),
@@ -980,12 +1016,14 @@ class _ChatBubble extends StatelessWidget {
     required this.fromUser,
     required this.timestamp,
     required this.assistantName,
+    this.onReferenceTap,
   });
 
   final String content;
   final bool fromUser;
   final DateTime timestamp;
   final String assistantName;
+  final void Function(ScriptureReference reference)? onReferenceTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1007,6 +1045,11 @@ class _ChatBubble extends StatelessWidget {
     final meta = TimeOfDay.fromDateTime(timestamp).format(context);
 
     void openReference(ScriptureReference ref) {
+      final handler = onReferenceTap;
+      if (handler != null) {
+        handler(ref);
+        return;
+      }
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => _BibleReferencePage(reference: ref)),
       );

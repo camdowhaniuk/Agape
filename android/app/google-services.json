@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "40155483321",
+    "project_id": "agape-89d91",
+    "storage_bucket": "agape-89d91.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:40155483321:android:417481540806f557a95f68",
+        "android_client_info": {
+          "package_name": "com.camden.agape"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBr2MkUhmLeTJv-fXgvbGAax4JRnSElAq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:40155483321:android:c7faec3d18092af9a95f68",
+        "android_client_info": {
+          "package_name": "com.example.agape"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBr2MkUhmLeTJv-fXgvbGAax4JRnSElAq0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
