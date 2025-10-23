@@ -1,4 +1,4 @@
-import 'dart:ui' show MaskFilter;
+import 'dart:ui' show MaskFilter, ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -11,13 +11,16 @@ import '../services/bible_service.dart';
 import '../services/highlight_service.dart';
 import '../services/usfm_utils.dart';
 import '../services/user_state_service.dart';
+import '../services/bible_navigation_service.dart';
 import '../utils/highlight_colors.dart';
+import '../utils/scripture_reference.dart';
 import '../widgets/header_pill.dart';
 
 class BibleScreen extends StatefulWidget {
   const BibleScreen({
     super.key,
     this.onScrollVisibilityChange,
+    this.onLocationChange,
     this.navVisible = true,
     this.initialBook,
     this.initialChapter,
@@ -26,6 +29,7 @@ class BibleScreen extends StatefulWidget {
   });
 
   final void Function(bool)? onScrollVisibilityChange;
+  final void Function(String book, int chapter)? onLocationChange;
   final bool navVisible;
   final String? initialBook;
   final int? initialChapter;
@@ -40,6 +44,7 @@ class _BibleScreenState extends State<BibleScreen> {
   final _service = BibleService();
   final HighlightService _highlightService = HighlightService();
   final UserStateService _userStateService = UserStateService.instance;
+  final BibleNavigationService _navService = BibleNavigationService.instance;
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
@@ -64,6 +69,7 @@ class _BibleScreenState extends State<BibleScreen> {
 
   bool _pendingInitialJump = false;
   int _initialListIndex = 0;
+
   String _visibleBook = 'John';
   int _visibleChapter = 1;
   bool _headerVisible = true;
@@ -281,6 +287,7 @@ class _BibleScreenState extends State<BibleScreen> {
             onHighlightUpdate: _handleHighlightDragUpdate,
             onHighlightEnd: _handleHighlightDragEnd,
             onHighlightTap: _handleHighlightTap,
+            onReferenceTap: _handleCrossReferenceTap,
             spanBuilder:
                 ({
                   required String book,
@@ -307,29 +314,95 @@ class _BibleScreenState extends State<BibleScreen> {
     required bool isDark,
     required double topPadding,
   }) {
+    final theme = Theme.of(context);
+    final canGoBack = _canGoBack();
+
     return Positioned(
       left: 0,
       right: 0,
       top: 0,
       child: Padding(
         padding: EdgeInsets.fromLTRB(16, topPadding + 8, 16, 12),
-        child: Align(
-          alignment: Alignment.topLeft,
-          child: IgnorePointer(
-            ignoring: !_headerVisible,
-            child: AnimatedSlide(
-              offset: _headerVisible ? Offset.zero : const Offset(0, -0.35),
-              duration: const Duration(milliseconds: 220),
+        child: IgnorePointer(
+          ignoring: !_headerVisible,
+          child: AnimatedSlide(
+            offset: _headerVisible ? Offset.zero : const Offset(0, -0.35),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            child: AnimatedOpacity(
+              opacity: _headerVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
-              child: AnimatedOpacity(
-                opacity: _headerVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutCubic,
-                child: HeaderPill(
-                  title: title,
-                  isDark: isDark,
-                  onTap: _showReferencePicker,
-                ),
+              child: Stack(
+                children: [
+                  // Back button in left corner (only show when history exists)
+                  if (canGoBack)
+                    Positioned(
+                      left: 0,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              offset: const Offset(0, 8),
+                              blurRadius: 24,
+                              spreadRadius: -4,
+                            ),
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.15),
+                              offset: const Offset(0, 4),
+                              blurRadius: 12,
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(24),
+                                splashColor: theme.colorScheme.primary
+                                    .withValues(alpha: isDark ? 0.22 : 0.16),
+                                highlightColor: Colors.transparent,
+                                onTap: _navigateBack,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(24),
+                                    color: const Color(0xFF1C1C1E)
+                                        .withValues(alpha: 0.2),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.12),
+                                      width: 0.5,
+                                    ),
+                                  ),
+                                  padding: const EdgeInsets.all(8),
+                                  child: Icon(
+                                    Icons.arrow_back_rounded,
+                                    size: 24,
+                                    color: isDark
+                                        ? Colors.white.withValues(alpha: 0.9)
+                                        : theme.colorScheme.onSurface
+                                            .withValues(alpha: 0.85),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  // Reference picker pill centered
+                  Center(
+                    child: HeaderPill(
+                      title: title,
+                      isDark: isDark,
+                      onTap: _showReferencePicker,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1019,6 +1092,18 @@ class _BibleScreenState extends State<BibleScreen> {
     _syncSavedCustomColors();
   }
 
+  void _handleCrossReferenceTap(ScriptureReference reference) {
+    // Save current location to history before navigating
+    _pushHistory();
+
+    // Navigate to the referenced book/chapter/verse
+    _jumpToChapter(
+      reference.book,
+      reference.chapter,
+      verse: reference.verse,
+    );
+  }
+
   Future<Color?> _pickCustomHighlightColor(
     BuildContext context,
     Color initial,
@@ -1521,6 +1606,8 @@ class _BibleScreenState extends State<BibleScreen> {
           _selectedChapter = ref.chapter;
         }
       });
+      // Notify parent of location change
+      widget.onLocationChange?.call(ref.book, ref.chapter);
     }
 
     final state = _chapterStates[topRef];
@@ -1681,8 +1768,12 @@ class _BibleScreenState extends State<BibleScreen> {
     final verseChanged = result.verse != _selectedVerse;
 
     if (bookChanged || chapterChanged) {
+      // Save current location to history before navigating
+      _pushHistory();
       await _jumpToChapter(result.book, result.chapter, verse: result.verse);
     } else if (verseChanged) {
+      // Just scrolling to a different verse in same chapter - also save history
+      _pushHistory();
       setState(() => _selectedVerse = result.verse);
       _currentVisibleVerse = result.verse;
       _currentVisibleAlignment = 0.0;
@@ -1781,6 +1872,37 @@ class _BibleScreenState extends State<BibleScreen> {
     }
 
     _saveLastLocation(alignment: 0);
+  }
+
+  // Navigation history methods
+  bool _canGoBack() {
+    return _navService.canGoBack;
+  }
+
+  void _pushHistory() {
+    _navService.pushHistory(
+      book: _selectedBook,
+      chapter: _selectedChapter,
+      verse: _selectedVerse,
+      scrollAlignment: _currentVisibleAlignment ?? 0.0,
+    );
+  }
+
+  Future<void> _navigateBack() async {
+    final previousLocation = _navService.popHistory();
+    if (previousLocation == null) return;
+
+    _navService.setNavigatingBack(true);
+
+    await _jumpToChapter(
+      previousLocation.book,
+      previousLocation.chapter,
+      verse: previousLocation.verse,
+    );
+
+    _navService.setNavigatingBack(false);
+
+    if (mounted) setState(() {});
   }
 
   List<InlineSpan> _buildJesusRedLetterSpans({
@@ -1951,6 +2073,7 @@ class _ChapterInlineText extends StatelessWidget {
     this.onHighlightUpdate,
     this.onHighlightEnd,
     this.onHighlightTap,
+    this.onReferenceTap,
   });
 
   final TextStyle baseStyle;
@@ -1991,6 +2114,7 @@ class _ChapterInlineText extends StatelessWidget {
     VerseHighlight highlight,
   )?
   onHighlightTap;
+  final void Function(ScriptureReference)? onReferenceTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2002,6 +2126,7 @@ class _ChapterInlineText extends StatelessWidget {
       final verseText = (v['text'] as String).replaceAll('\n', ' ').trim();
       if (verseText.isEmpty) continue;
       final isSelected = verseNum == selectedVerse;
+      final crossRefs = (v['crossReferences'] as List<dynamic>?)?.cast<String>() ?? <String>[];
       final rawHighlights =
           chapterState?.highlights[verseNum] ?? const <VerseHighlight>[];
       final verseHighlights = List<VerseHighlight>.from(rawHighlights)
@@ -2101,6 +2226,36 @@ class _ChapterInlineText extends StatelessWidget {
           ),
         ),
       );
+
+      // Add cross-reference pills if they exist
+      if (crossRefs.isNotEmpty) {
+        spans.add(const TextSpan(text: ' '));
+        for (int i = 0; i < crossRefs.length; i++) {
+          final refText = crossRefs[i];
+          if (refText.trim().isEmpty) continue;
+
+          // Parse the cross-reference text and create clickable pills
+          final matches = ScriptureReferenceParser.extractMatches(refText);
+          if (matches.isNotEmpty) {
+            for (final match in matches) {
+              spans.add(
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 4, right: 4),
+                    child: _buildCrossReferencePill(
+                      context,
+                      match.matchedText.trim(),
+                      match.reference,
+                      onReferenceTap,
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+        }
+      }
 
       spans.add(const TextSpan(text: ' '));
     }
@@ -2249,6 +2404,59 @@ class _ChapterInlineText extends StatelessWidget {
       baseStyle,
     );
   }
+}
+
+Widget _buildCrossReferencePill(
+  BuildContext context,
+  String label,
+  ScriptureReference reference,
+  void Function(ScriptureReference)? onTap,
+) {
+  final theme = Theme.of(context);
+  final isDark = theme.brightness == Brightness.dark;
+  final linkColor = theme.colorScheme.primary;
+  final Color textColor = isDark ? Colors.white : linkColor;
+  final BorderRadius radius = BorderRadius.circular(999);
+
+  return Semantics(
+    button: true,
+    label: 'Open $label',
+    child: Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: onTap != null ? () => onTap(reference) : null,
+        borderRadius: radius,
+        splashColor: linkColor.withOpacity(isDark ? 0.24 : 0.18),
+        highlightColor: linkColor.withOpacity(isDark ? 0.18 : 0.1),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: linkColor.withOpacity(isDark ? 0.28 : 0.16),
+            borderRadius: radius,
+            border: Border.all(color: linkColor.withOpacity(isDark ? 0.55 : 0.28), width: 1),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.menu_book_rounded, size: 14, color: textColor),
+                const SizedBox(width: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _VerseInline extends StatefulWidget {
@@ -2808,21 +3016,33 @@ class _ReferencePickerSheetState extends State<_ReferencePickerSheet> {
     int? chapter;
     int? verse;
     if (m1 != null) {
+      // Explicit chapter:verse or chapter verse format
       chapter = int.tryParse(m1.group(1)!);
       verse = int.tryParse(m1.group(2)!);
     } else {
+      // Only digits - try to parse as chapter only first
       final digits = RegExp(r'^\d+$');
-      if (digits.hasMatch(rest) && rest.length >= 2) {
-        for (int i = 1; i < rest.length; i++) {
-          final ch = int.tryParse(rest.substring(0, i));
-          final vs = int.tryParse(rest.substring(i));
-          if (ch != null && vs != null && ch >= 1 && ch <= chapterCount) {
-            chapter = ch;
-            verse = vs;
-            break;
+      if (digits.hasMatch(rest)) {
+        chapter = int.tryParse(rest);
+        // If the chapter number is valid, use it as-is
+        // Don't try to split it into chapter:verse
+        if (chapter != null && chapter >= 1 && chapter <= chapterCount) {
+          // Valid chapter number, don't split
+        } else {
+          // Invalid chapter, might be concatenated chapter+verse
+          // Only try splitting if length >= 2
+          if (rest.length >= 2) {
+            for (int i = 1; i < rest.length; i++) {
+              final ch = int.tryParse(rest.substring(0, i));
+              final vs = int.tryParse(rest.substring(i));
+              if (ch != null && vs != null && ch >= 1 && ch <= chapterCount) {
+                chapter = ch;
+                verse = vs;
+                break;
+              }
+            }
           }
         }
-        chapter ??= int.tryParse(rest);
       } else {
         chapter = int.tryParse(rest);
       }

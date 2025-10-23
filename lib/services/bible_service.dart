@@ -300,12 +300,40 @@ class BibleService {
         }
 
         if (tag == 'f') {
-          final closing = raw.indexOf('\\f*', k);
+          // Skip footnotes (\f)
+          final closingTag = '\\f*';
+          final closing = raw.indexOf(closingTag, k);
           if (closing == -1) {
             index = length;
           } else {
-            index = closing + 3;
+            index = closing + closingTag.length;
           }
+          continue;
+        }
+
+        if (tag == 'x') {
+          // Extract cross-references (\x ... \xt ... \x*)
+          final closingTag = '\\x*';
+          final closing = raw.indexOf(closingTag, k);
+          if (closing == -1) {
+            index = length;
+            continue;
+          }
+
+          // Extract the content between \x and \x*
+          final xContent = raw.substring(k, closing);
+
+          // Look for \xt tag which contains the actual reference text
+          final xtMatch = RegExp(r'\\xt\s+(.+?)(?=\\|$)').firstMatch(xContent);
+          if (xtMatch != null && curChapter == chapter && curVerse > 0) {
+            final referenceText = xtMatch.group(1)?.trim() ?? '';
+            if (referenceText.isNotEmpty) {
+              final acc = accForCurrentVerse();
+              acc.addCrossReference(referenceText);
+            }
+          }
+
+          index = closing + closingTag.length;
           continue;
         }
 
@@ -357,6 +385,7 @@ class BibleService {
                   'wj': seg.isWj,
                 })
             .toList(),
+        'crossReferences': acc.crossReferences,
       });
     }
     return verses;
@@ -372,6 +401,7 @@ class _Seg {
 class _VerseAccumulator {
   final StringBuffer buffer = StringBuffer();
   final List<_Seg> segments = <_Seg>[];
+  final List<String> crossReferences = <String>[];
   bool _lastWasSpace = true;
 
   void appendRaw(String value, bool isWj) {
@@ -396,7 +426,57 @@ class _VerseAccumulator {
     }
   }
 
+  void addCrossReference(String reference) {
+    if (reference.isNotEmpty) {
+      crossReferences.add(reference);
+    }
+  }
+
+  void removeTrailingText(String textToRemove) {
+    if (textToRemove.isEmpty) return;
+
+    // Remove from buffer
+    final bufferContent = buffer.toString();
+    if (bufferContent.endsWith(textToRemove)) {
+      buffer.clear();
+      buffer.write(bufferContent.substring(0, bufferContent.length - textToRemove.length));
+    }
+
+    // Remove from segments
+    int remaining = textToRemove.length;
+    while (remaining > 0 && segments.isNotEmpty) {
+      final lastSeg = segments.last;
+      final segText = lastSeg.text.toString();
+      if (segText.length <= remaining) {
+        remaining -= segText.length;
+        segments.removeLast();
+      } else {
+        // Partial removal from last segment
+        final newText = segText.substring(0, segText.length - remaining);
+        lastSeg.text.clear();
+        lastSeg.text.write(newText);
+        remaining = 0;
+      }
+    }
+
+    // Update _lastWasSpace flag
+    if (buffer.isEmpty) {
+      _lastWasSpace = true;
+    } else {
+      final content = buffer.toString();
+      _lastWasSpace = content.isEmpty || content.endsWith(' ');
+    }
+  }
+
   String buildText() {
-    return buffer.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    var text = buffer.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Remove footnote/cross-reference markers (standalone numbers or symbols)
+    // Pattern: space followed by single digit/symbol followed by space or end of string
+    text = text.replaceAll(RegExp(r'\s+[+\-*0-9](\s+|$)'), ' ');
+    // Pattern: single digit/symbol at start followed by space
+    text = text.replaceAll(RegExp(r'^[+\-*0-9]\s+'), '');
+    // Pattern: single digit/symbol at end preceded by space
+    text = text.replaceAll(RegExp(r'\s+[+\-*0-9]$'), '');
+    return text.trim();
   }
 }

@@ -1,75 +1,33 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/note.dart';
+import 'notes_firestore_repository.dart';
 
 class NotesService {
   NotesService._internal() {
-    final now = DateTime.now();
-    final today = now.subtract(
-      Duration(
-        hours: now.hour,
-        minutes: now.minute,
-        seconds: now.second,
-        milliseconds: now.millisecond,
-        microseconds: now.microsecond,
-      ),
-    );
-
-    final seedNotes = <Note>[
-      Note(
-        id: _nextId(),
-        title: 'Agape Bible Study App',
-        preview: 'OpenAI Key',
-        createdAt: today.add(const Duration(hours: 7, minutes: 58)),
-        folder: 'Agape',
-        tags: const ['dev', 'todo'],
-        pinned: true,
-      ),
-      Note(
-        id: _nextId(),
-        title: 'Day 1: Upper (chest and back)',
-        preview: 'Warm-up set + scripture meditation outline',
-        createdAt: today.subtract(const Duration(days: 8, hours: -2)),
-        updatedAt: today.subtract(const Duration(days: 8, hours: -1)),
-        folder: 'Workout',
-      ),
-      Note(
-        id: _nextId(),
-        title: 'Flee from lust',
-        preview: 'August 19 – Proverbs 7 journal and prayer points.',
-        createdAt: today.subtract(const Duration(days: 13, hours: 12)),
-        folder: 'Devotionals',
-        tags: const ['proverbs', 'accountability'],
-      ),
-      Note(
-        id: _nextId(),
-        title: 'Leviticus Bible Study',
-        preview: 'Chapter 1 – The Burnt Offering outline and insights.',
-        createdAt: today.subtract(const Duration(days: 40)),
-        folder: 'Old Testament',
-      ),
-      Note(
-        id: _nextId(),
-        title: 'End-times Study',
-        preview: 'Old Testament prophecies cross-reference.',
-        createdAt: today.subtract(const Duration(days: 60)),
-        folder: 'Prophecy',
-      ),
-      Note(
-        id: _nextId(),
-        title: 'New Note',
-        preview: 'No additional text',
-        createdAt: today.subtract(const Duration(days: 45)),
-      ),
-    ];
-
-    _notesNotifier.value = List<Note>.unmodifiable(seedNotes);
+    // Listen to auth state changes and reload notes accordingly
+    _auth.authStateChanges().listen((user) {
+      if (user == null) {
+        // User logged out - clear notes
+        _notesNotifier.value = const <Note>[];
+      } else {
+        // User logged in - load their notes
+        loadNotes();
+      }
+    });
   }
 
   static final NotesService instance = NotesService._internal();
+
+  final NotesFirestoreRepository _repository = NotesFirestoreRepository();
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+
+  /// Get current user ID, or null if not logged in
+  String? get _userId => _auth.currentUser?.uid;
 
   final ValueNotifier<List<Note>> _notesNotifier = ValueNotifier<List<Note>>(
     const <Note>[],
@@ -79,9 +37,29 @@ class NotesService {
 
   List<Note> get notes => List<Note>.unmodifiable(_notesNotifier.value);
 
+  /// Load notes from Firestore for the current user
   Future<List<Note>> loadNotes() async {
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-    return notes;
+    final userId = _userId;
+
+    // If user is not logged in, return empty list
+    if (userId == null) {
+      _notesNotifier.value = const <Note>[];
+      return const <Note>[];
+    }
+
+    try {
+      // Fetch notes from Firestore
+      final notes = await _repository.loadNotes(userId);
+
+      // Update in-memory cache
+      _notesNotifier.value = List<Note>.unmodifiable(notes);
+
+      return notes;
+    } catch (e) {
+      // If error, return current cached notes
+      print('Error loading notes: $e');
+      return notes;
+    }
   }
 
   Future<Note> createEmptyNote() async {
@@ -95,11 +73,26 @@ class NotesService {
     return note;
   }
 
+  /// Add a new note and save to Firestore
   Future<void> addNote(Note note) async {
+    // Update in-memory cache immediately (optimistic update)
     final updated = [..._notesNotifier.value, note];
     _notesNotifier.value = List<Note>.unmodifiable(updated);
+
+    // Persist to Firestore
+    final userId = _userId;
+    if (userId != null) {
+      try {
+        await _repository.saveNote(userId, note);
+      } catch (e) {
+        print('Error adding note to Firestore: $e');
+        // Note: We keep the optimistic update even if Firestore fails
+        // The note will be saved when connectivity is restored (offline persistence)
+      }
+    }
   }
 
+  /// Update an existing note and save to Firestore
   Future<void> updateNote(
     String id, {
     required Note Function(Note) transform,
@@ -107,15 +100,42 @@ class NotesService {
     final current = _notesNotifier.value;
     final index = current.indexWhere((note) => note.id == id);
     if (index == -1) return;
+
+    // Update in-memory cache immediately (optimistic update)
     final mutable = List<Note>.from(current);
-    mutable[index] = transform(mutable[index]);
+    final updatedNote = transform(mutable[index]);
+    mutable[index] = updatedNote;
     _notesNotifier.value = List<Note>.unmodifiable(mutable);
+
+    // Persist to Firestore
+    final userId = _userId;
+    if (userId != null) {
+      try {
+        await _repository.saveNote(userId, updatedNote);
+      } catch (e) {
+        print('Error updating note in Firestore: $e');
+        // Note: We keep the optimistic update even if Firestore fails
+      }
+    }
   }
 
+  /// Delete a note and remove from Firestore
   Future<void> deleteNote(String id) async {
+    // Update in-memory cache immediately (optimistic update)
     _notesNotifier.value = List<Note>.unmodifiable(
       _notesNotifier.value.where((note) => note.id != id),
     );
+
+    // Remove from Firestore
+    final userId = _userId;
+    if (userId != null) {
+      try {
+        await _repository.deleteNote(userId, id);
+      } catch (e) {
+        print('Error deleting note from Firestore: $e');
+        // Note: We keep the optimistic update even if Firestore fails
+      }
+    }
   }
 
   Future<void> togglePinned(String id) async {

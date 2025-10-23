@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 import 'widgets/auth_gate.dart';
 
@@ -13,6 +14,7 @@ import 'screens/notes_screen.dart';
 
 // Utils & Services
 import 'services/highlight_service.dart';
+import 'services/bible_navigation_service.dart';
 import 'utils/scripture_reference.dart';
 
 void main() async {
@@ -20,6 +22,13 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Enable Firestore offline persistence
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true,
+    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+  );
+
   runApp(const AgapeApp());
 }
 
@@ -47,7 +56,7 @@ class AgapeApp extends StatelessWidget {
       brightness: Brightness.light,
       colorScheme: ColorScheme.light(
         primary: const Color(0xFFDC143C), // Crimson red
-        secondary: const Color(0xFF8B0000), // Dark red
+        secondary: const Color(0xFFDC143C), // Crimson red
         surface: Colors.white,
         error: const Color(0xFFB00020),
         onPrimary: Colors.white,
@@ -69,8 +78,8 @@ class AgapeApp extends StatelessWidget {
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: ColorScheme.dark(
-        primary: const Color(0xFFFF4444), // Bright red
-        secondary: const Color(0xFFCC0000), // Red
+        primary: const Color(0xFFDC143C), // Crimson
+        secondary: const Color(0xFFDC143C), // Crimson
         surface: const Color(0xFF1A1A1A), // Very dark gray (almost black)
         error: const Color(0xFFCF6679),
         onPrimary: Colors.white,
@@ -99,6 +108,7 @@ class AgapeMainShell extends StatefulWidget {
 }
 
 class _AgapeMainShellState extends State<AgapeMainShell> {
+  final BibleNavigationService _navService = BibleNavigationService.instance;
   int _selectedIndex = 0;
   bool _showBottomBar = true;
   ThemeMode _themeMode = ThemeMode.dark;
@@ -108,6 +118,10 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
   int? _bibleInitialChapter;
   int? _bibleInitialVerse;
   int _bibleNavRequestKey = 0;
+
+  // Track last known Bible location for cross-tab navigation
+  String _lastBibleBook = 'John';
+  int _lastBibleChapter = 1;
 
   void _setBottomBarVisible(bool visible) {
     if (_showBottomBar != visible) {
@@ -152,6 +166,14 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
   }
 
   void _handleReferenceTap(ScriptureReference reference) {
+    // If we're navigating from a different tab, push current Bible location to history
+    if (_selectedIndex != 1) {
+      _navService.pushHistory(
+        book: _lastBibleBook,
+        chapter: _lastBibleChapter,
+      );
+    }
+
     _openBibleAt(
       book: reference.book,
       chapter: reference.chapter,
@@ -166,6 +188,10 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
       BibleScreen(
         key: ValueKey<int>(_bibleNavRequestKey),
         onScrollVisibilityChange: _setBottomBarVisible,
+        onLocationChange: (book, chapter) {
+          _lastBibleBook = book;
+          _lastBibleChapter = chapter;
+        },
         navVisible: _showBottomBar,
         navVisibilityResetTick: _navVisibilityResetTick,
         initialBook: _bibleInitialBook,
@@ -200,7 +226,7 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
         brightness: Brightness.light,
         colorScheme: ColorScheme.light(
           primary: const Color(0xFFDC143C), // Crimson red
-          secondary: const Color(0xFF8B0000), // Dark red
+          secondary: const Color(0xFFDC143C), // Crimson red
           surface: Colors.white,
           error: const Color(0xFFB00020),
           onPrimary: Colors.white,
@@ -219,8 +245,8 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
         useMaterial3: true,
         brightness: Brightness.dark,
         colorScheme: ColorScheme.dark(
-          primary: const Color(0xFFFF4444), // Bright red
-          secondary: const Color(0xFFCC0000), // Red
+          primary: const Color(0xFFDC143C), // Crimson red
+          secondary: const Color(0xFFDC143C), // Crimson red
           surface: const Color(0xFF1A1A1A), // Very dark gray (almost black)
           error: const Color(0xFFCF6679),
           onPrimary: Colors.white,
@@ -339,11 +365,7 @@ class _IOSNavBar extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
         opacity: visible ? 1 : 0,
-        child: AnimatedSlide(
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
-          offset: visible ? Offset.zero : const Offset(0, 0.25),
-          child: DecoratedBox(
+        child: DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(26),
               boxShadow: [
@@ -363,7 +385,7 @@ class _IOSNavBar extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(26),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
                 child: Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(26),
@@ -387,7 +409,6 @@ class _IOSNavBar extends StatelessWidget {
               ),
             ),
           ),
-        ),
       ),
     );
   }
@@ -473,8 +494,8 @@ class _LiquidNavDestination extends StatelessWidget {
     final Color inactiveForeground = const Color(0xFFBBBBBB); // Light gray/white for inactive
     final Color activeForeground = const Color(0xFF2C2C2E); // Dark gray for active text/icon
 
-    // Light beige/cream pill matching Apple Books "Home" tab
-    final Color activePillColor = const Color(0xFFB5A89A); // Light beige/cream
+    // Crimson
+    final Color activePillColor = const Color(0xFFDC143C);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -483,47 +504,70 @@ class _LiquidNavDestination extends StatelessWidget {
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCubic,
         margin: const EdgeInsets.symmetric(horizontal: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-        decoration: active
-            ? BoxDecoration(
-                color: activePillColor,
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.15),
-                    blurRadius: 6,
-                    spreadRadius: 0,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
+        decoration: null,
+        child: active
+            ? Container(
+                decoration: BoxDecoration(
+                  color: activePillColor,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      item.icon,
+                      size: 24,
+                      color: activeForeground,
+                      weight: 500,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      item.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.visible,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.0,
+                        height: 1.2,
+                        color: activeForeground,
+                      ),
+                    ),
+                  ],
+                ),
               )
-            : null,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              item.icon,
-              size: 24,
-              color: active ? activeForeground : inactiveForeground,
-              weight: active ? 500 : 400,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              item.label,
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.1,
-                height: 1.2,
-                color: active ? activeForeground : inactiveForeground,
+            : Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      item.icon,
+                      size: 24,
+                      color: inactiveForeground,
+                      weight: 400,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      item.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.visible,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.0,
+                        height: 1.2,
+                        color: inactiveForeground,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
-        ),
       ),
     );
   }

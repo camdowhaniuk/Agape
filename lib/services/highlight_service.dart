@@ -2,20 +2,133 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/highlight.dart';
+import 'highlight_firestore_repository.dart';
 
 class HighlightService {
-  HighlightService();
+  HighlightService() {
+    _setupAuthListener();
+  }
 
   final Map<String, List<PassageHighlight>> _store = {};
   static const int _maxCustomColors = 8;
   final List<int> _customColors = [];
   File? _backingFile;
   bool _loaded = false;
+  final HighlightFirestoreRepository _firestoreRepo = HighlightFirestoreRepository();
+  String? _currentUserId;
 
   Future<void> ensureLoaded() async {
     if (_loaded) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      // No user logged in - try to load from local file for backward compatibility
+      await _loadFromLocalFile();
+    } else {
+      // User logged in - load from Firestore
+      try {
+        final highlights = await _firestoreRepo.loadHighlights(user.uid);
+        _store.clear();
+        _store.addAll(highlights);
+
+        final customColors = await _firestoreRepo.loadCustomColors(user.uid);
+        _customColors.clear();
+        _customColors.addAll(customColors);
+
+        if (_customColors.isEmpty) {
+          _backfillCustomColors();
+        }
+
+        // If Firestore is empty but we have local highlights, migrate them
+        if (_store.isEmpty) {
+          await _migrateLocalHighlightsIfNeeded(user.uid);
+        }
+      } catch (e) {
+        print('Error loading highlights from Firestore: $e');
+        _store.clear();
+        _customColors.clear();
+      }
+    }
+
+    _loaded = true;
+  }
+
+  Future<void> _migrateLocalHighlightsIfNeeded(String userId) async {
+    try {
+      // Try to load from local file
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/highlights.json');
+
+      if (!await file.exists()) return;
+
+      final raw = await file.readAsString();
+      if (raw.isEmpty) return;
+
+      final decoded = json.decode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+
+      // Parse local highlights
+      final Map<String, List<PassageHighlight>> localHighlights = {};
+      final highlightsNode = decoded['highlights'];
+
+      if (highlightsNode is Map<String, dynamic>) {
+        highlightsNode.forEach((rawKey, value) {
+          if (value is! List) return;
+          final parts = rawKey.split('|');
+          if (parts.length == 2) {
+            final spans = <PassageHighlight>[];
+            for (final item in value) {
+              if (item is Map<String, dynamic>) {
+                try {
+                  final parsed = PassageHighlight.fromJson(item);
+                  if (parsed.portions.isNotEmpty) {
+                    spans.add(parsed);
+                  }
+                } catch (_) {
+                  continue;
+                }
+              }
+            }
+            if (spans.isNotEmpty) {
+              localHighlights[rawKey] = spans;
+            }
+          }
+        });
+      }
+
+      if (localHighlights.isEmpty) return;
+
+      print('Migrating ${localHighlights.length} chapters of highlights to Firestore...');
+
+      // Migrate to Firestore
+      _store.clear();
+      _store.addAll(localHighlights);
+
+      // Parse custom colors
+      final custom = decoded['customColors'];
+      if (custom is List) {
+        _customColors.clear();
+        _customColors.addAll(
+          custom
+              .whereType<num>()
+              .map((value) => value.toInt())
+              .where((value) => value > 0),
+        );
+      }
+
+      // Persist to Firestore
+      await _persist();
+
+      print('Migration completed successfully!');
+    } catch (e) {
+      print('Error migrating local highlights: $e');
+    }
+  }
+
+  Future<void> _loadFromLocalFile() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/highlights.json');
     _backingFile = file;
@@ -56,7 +169,6 @@ class HighlightService {
     } else {
       await file.create(recursive: true);
     }
-    _loaded = true;
   }
 
   Future<Map<int, List<VerseHighlight>>> highlightsFor(
@@ -277,6 +389,32 @@ class HighlightService {
   }
 
   Future<void> _persist() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      // No user logged in - save to local file for backward compatibility
+      await _persistToLocalFile();
+      return;
+    }
+
+    // User logged in - save to Firestore
+    try {
+      // Save each chapter's highlights
+      for (final entry in _store.entries) {
+        await _firestoreRepo.saveChapterHighlights(
+          user.uid,
+          entry.key,
+          entry.value,
+        );
+      }
+
+      // Save custom colors
+      await _firestoreRepo.saveCustomColors(user.uid, _customColors);
+    } catch (e) {
+      print('Error persisting highlights to Firestore: $e');
+    }
+  }
+
+  Future<void> _persistToLocalFile() async {
     final file = _backingFile;
     if (file == null) return;
     final highlightsPayload = <String, dynamic>{};
@@ -470,6 +608,25 @@ class HighlightService {
     for (final entry in ordered) {
       _addCustomColorInternal(entry.key);
     }
+  }
+
+  void _setupAuthListener() {
+    FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+      if (user == null) {
+        // User logged out - clear highlights
+        _currentUserId = null;
+        _store.clear();
+        _customColors.clear();
+        _loaded = false;
+      } else if (_currentUserId != user.uid) {
+        // User logged in or switched - load their highlights
+        _currentUserId = user.uid;
+        _store.clear();
+        _customColors.clear();
+        _loaded = false;
+        await ensureLoaded();
+      }
+    });
   }
 
   String _newHighlightId() =>

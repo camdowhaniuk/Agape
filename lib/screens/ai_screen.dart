@@ -1,3 +1,4 @@
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../services/ai_conversation.dart';
@@ -41,7 +42,8 @@ class _AIScreenState extends State<AIScreen> {
       'Prefer Scripture to speculation. Cite passages naturally. Be pastoral, clear, and concise while also remaining friendly.'
       'Reflect the character of Jesus in your words. Full of grace and truth. '
       'Your name is Agape to bring reverance to the love of Jesus Christ that surpasses all knowledge. '
-      'Reflect the wisdom of Jesus in your answers. ';
+      'Reflect the wisdom of Jesus in your answers. '
+      'You have no authority in your teachings, only point to what the Bible says';
 
   late final AIService _service = AIService(systemPrompt: _systemPrompt);
   final AIConversationStore _store = AIConversationStore();
@@ -681,6 +683,7 @@ class _AIScreenState extends State<AIScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+
     final media = MediaQuery.of(context);
     final double bottomInset = media.padding.bottom;
     final double navBottomPadding = bottomInset * 0.5 + 6;
@@ -775,10 +778,11 @@ class _AIScreenState extends State<AIScreen> {
                       icon: Icons.menu_rounded,
                     ),
                     const Spacer(),
-                    FloatingActionButton(
-                      heroTag: 'agape-new-chat',
+                    _SurfaceIconButton(
+                      tooltip: 'New chat',
                       onPressed: _newChat,
-                      child: const Icon(Icons.add_comment_rounded),
+                      icon: Icons.add_comment_rounded,
+                      crimson: true,
                     ),
                   ],
                 ),
@@ -894,79 +898,94 @@ class _FloatingComposerState extends State<_FloatingComposer> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final Color bgColor = widget.isDark
-        ? const Color(0xFF242429).withOpacity(0.9)
-        : scheme.surface.withOpacity(0.96);
-    final Color borderColor = widget.isDark
-        ? Colors.white10
-        : Colors.black12.withOpacity(0.12);
     final Color buttonColor = scheme.primary;
 
-    return Material(
-      color: Colors.transparent,
-      elevation: widget.isDark ? 10 : 14,
-      shadowColor: Colors.black.withOpacity(widget.isDark ? 0.5 : 0.2),
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: borderColor, width: 0.7),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                focusNode: _focusNode,
-                controller: widget.controller,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => widget.onSend(),
-                decoration: InputDecoration(
-                  hintText: "What's on your mind?",
-                  hintStyle: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.textTheme.bodyMedium?.color?.withOpacity(0.55),
-                  ),
-                  contentPadding: EdgeInsets.zero,
-                  border: InputBorder.none,
-                  isCollapsed: true,
-                ),
-                style: theme.textTheme.bodyMedium,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            offset: const Offset(0, 8),
+            blurRadius: 24,
+            spreadRadius: -4,
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            offset: const Offset(0, 4),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              color: const Color(0xFF1C1C1E).withValues(alpha: 0.2),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.12),
+                width: 0.5,
               ),
             ),
-            const SizedBox(width: 12),
-            SizedBox(
-              height: 44,
-              width: 44,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: buttonColor,
-                  shape: const CircleBorder(),
-                  padding: EdgeInsets.zero,
-                  elevation: 0,
-                ),
-                onPressed: widget.sending ? null : widget.onSend,
-                child: widget.sending
-                    ? SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            theme.colorScheme.onPrimary,
-                          ),
-                        ),
-                      )
-                    : Icon(
-                        Icons.send_rounded,
-                        size: 18,
-                        color: theme.colorScheme.onPrimary,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    focusNode: _focusNode,
+                    controller: widget.controller,
+                    minLines: 1,
+                    maxLines: 4,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => widget.onSend(),
+                    decoration: InputDecoration(
+                      hintText: "What's on your mind?",
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.textTheme.bodyMedium?.color?.withOpacity(0.55),
                       ),
-              ),
+                      contentPadding: EdgeInsets.zero,
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                    ),
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                SizedBox(
+                  height: 44,
+                  width: 44,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: buttonColor,
+                      shape: const CircleBorder(),
+                      padding: EdgeInsets.zero,
+                      elevation: 0,
+                    ),
+                    onPressed: widget.sending ? null : widget.onSend,
+                    child: widget.sending
+                        ? SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                theme.colorScheme.onPrimary,
+                              ),
+                            ),
+                          )
+                        : Icon(
+                            Icons.send_rounded,
+                            size: 18,
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -978,33 +997,64 @@ class _SurfaceIconButton extends StatelessWidget {
     required this.onPressed,
     required this.icon,
     required this.tooltip,
+    this.crimson = false,
   });
 
   final VoidCallback onPressed;
   final IconData icon;
   final String tooltip;
+  final bool crimson;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final bool isDark = theme.brightness == Brightness.dark;
-    final Color base = isDark
-        ? const Color(0xFF242429).withOpacity(0.9)
-        : theme.colorScheme.surface.withOpacity(0.96);
     final BorderRadius radius = BorderRadius.circular(20);
+    final Color iconColor = crimson
+        ? theme.colorScheme.primary
+        : theme.colorScheme.onSurface;
 
-    return Material(
-      color: base,
-      elevation: isDark ? 6 : 8,
-      borderRadius: radius,
-      shadowColor: Colors.black.withOpacity(isDark ? 0.45 : 0.18),
-      clipBehavior: Clip.antiAlias,
-      child: IconButton(
-        tooltip: tooltip,
-        iconSize: 22,
-        color: theme.colorScheme.onSurface,
-        onPressed: onPressed,
-        icon: Icon(icon),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            offset: const Offset(0, 8),
+            blurRadius: 24,
+            spreadRadius: -4,
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            offset: const Offset(0, 4),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: radius,
+                color: const Color(0xFF1C1C1E).withValues(alpha: 0.2),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.12),
+                  width: 0.5,
+                ),
+              ),
+              child: IconButton(
+                tooltip: tooltip,
+                iconSize: 22,
+                color: iconColor,
+                onPressed: onPressed,
+                icon: Icon(icon),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

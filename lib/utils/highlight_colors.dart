@@ -3,27 +3,23 @@ import 'package:flutter/material.dart';
 import '../models/highlight.dart';
 
 const List<Color> kHighlightPaletteLight = [
-  Color(0xB3FFCDD2), // Light red/pink
-  Color(0xB3FF8A80), // Coral red
-  Color(0xB3EF5350), // Red
-  Color(0xB3FFE0E0), // Very light pink
-  Color(0xB3FFC1C1), // Light pink
-  Color(0xB3FF6B6B), // Medium red
-  Color(0xB3D32F2F), // Dark red
-  Color(0xB3B71C1C), // Deep red
-  Color(0xB3FFB3BA), // Soft pink
+  Color(0xB3FF0000), // Red
+  Color(0xB3FF9F40), // Orange
+  Color(0xB3FFD93D), // Yellow
+  Color(0xB36BCF7E), // Green
+  Color(0xB34D9DE0), // Blue
+  Color(0xB39B6BCF), // Indigo/Purple
+  Color(0xB3E17BFF), // Violet/Pink
 ];
 
 const List<Color> kHighlightPaletteDark = [
-  Color(0x80FF6B6B), // Bright red
-  Color(0x80EF5350), // Red
-  Color(0x80E57373), // Light red
-  Color(0x80F44336), // Vibrant red
-  Color(0x80FF5252), // Accent red
-  Color(0x80D32F2F), // Dark red
-  Color(0x80C62828), // Deeper red
-  Color(0x80FFCDD2), // Light pink
-  Color(0x80FF8A80), // Coral
+  Color(0x80FF0000), // Red
+  Color(0x80FF8A50), // Orange
+  Color(0x80FFD740), // Yellow
+  Color(0x8069F0AE), // Green
+  Color(0x8040C4FF), // Blue
+  Color(0x80B388FF), // Indigo/Purple
+  Color(0x80EA80FC), // Violet/Pink
 ];
 
 List<Color> highlightPalette(bool dark) =>

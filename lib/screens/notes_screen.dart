@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -320,20 +319,16 @@ class _NotesScreenState extends State<NotesScreen> {
                     ],
                   ),
                   Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: navBarHeight + media.padding.bottom + 4,
-                    child: AnimatedSlide(
-                      duration: const Duration(milliseconds: 260),
-                      curve: Curves.easeOutCubic,
-                      offset: _showNavChrome
-                          ? Offset.zero
-                          : const Offset(0, 0.2),
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOut,
-                        opacity: _showNavChrome ? 1 : 0,
-                        child: _buildBottomBar(context),
+                    left: 56,
+                    right: 56,
+                    top: media.padding.top + 8,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOut,
+                      opacity: _showNavChrome ? 1 : 0,
+                      child: IgnorePointer(
+                        ignoring: !_showNavChrome,
+                        child: _buildTopSearchBar(context),
                       ),
                     ),
                   ),
@@ -489,117 +484,71 @@ class _NotesScreenState extends State<NotesScreen> {
   Future<void> _handleStretchTrigger() async {
     if (!mounted) return;
     _setNavChromeVisible(true, force: true);
-    FocusScope.of(context).requestFocus(_searchFocusNode);
   }
 
-  Widget _buildBottomBar(BuildContext context) {
+  Widget _buildTopSearchBar(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
-    final searchBackground = isDark
-        ? const Color(0xFF1C1C1E).withValues(alpha: 0.2)
-        : scheme.surface.withValues(alpha: 0.85);
-    final borderColor = Colors.white.withValues(alpha: 0.12);
-    final iconColor = scheme.onSurfaceVariant.withValues(alpha: 0.7);
 
-    final media = MediaQuery.of(context);
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        24,
-        0,
-        24,
-        1 + media.viewPadding.bottom * 0.05,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: searchBackground,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: borderColor),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Flexible(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 250),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  width: 1,
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.search_rounded,
+                    size: 18,
+                    color: Colors.white.withValues(alpha: 0.7),
                   ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 4,
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.search_rounded, size: 18, color: iconColor),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        focusNode: _searchFocusNode,
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'Search',
-                          hintStyle: theme.textTheme.bodyMedium?.copyWith(
-                            color: iconColor,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          isCollapsed: true,
-                          contentPadding: EdgeInsets.zero,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      decoration: InputDecoration(
+                        border: InputBorder.none,
+                        hintText: 'Search',
+                        hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w400,
                         ),
-                        textInputAction: TextInputAction.search,
-                        cursorColor: iconColor,
+                        isCollapsed: true,
+                        contentPadding: EdgeInsets.zero,
                       ),
+                      textInputAction: TextInputAction.search,
+                      cursorColor: scheme.primary,
+                      style: const TextStyle(fontSize: 15, color: Colors.white),
                     ),
-                    IconButton(
-                      tooltip: 'Voice search',
-                      splashRadius: 22,
-                      onPressed: _handleMicPressed,
-                      icon: Icon(
-                        Icons.mic_none_rounded,
-                        size: 18,
-                        color: iconColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-                ),
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: 16),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: searchBackground,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: borderColor),
-                ),
-                child: IconButton(
-                  tooltip: 'New note',
-                  splashRadius: 22,
-                  onPressed: _composeNewNote,
-                  icon: Icon(Icons.edit_note_rounded, size: 20, color: iconColor),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _handleMicPressed() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('TODO: Implement voice search & dictation.'),
-        duration: Duration(seconds: 2),
-      ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'New note',
+          iconSize: 22,
+          padding: const EdgeInsets.all(8),
+          onPressed: _composeNewNote,
+          icon: const Icon(Icons.edit_outlined, color: Colors.white),
+        ),
+      ],
     );
   }
 
