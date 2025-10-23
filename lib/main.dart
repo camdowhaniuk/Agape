@@ -184,7 +184,11 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      const HomeScreen(),
+      HomeScreen(
+        onVerseOfTheDayTap: (book, chapter, verse) {
+          _openBibleAt(book: book, chapter: chapter, verse: verse);
+        },
+      ),
       BibleScreen(
         key: ValueKey<int>(_bibleNavRequestKey),
         onScrollVisibilityChange: _setBottomBarVisible,

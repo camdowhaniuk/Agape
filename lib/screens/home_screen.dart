@@ -1,16 +1,129 @@
-
 import 'package:flutter/material.dart';
-import 'default_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/verse_of_the_day_service.dart';
+import '../widgets/verse_of_the_day_card.dart';
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({
+    super.key,
+    this.onVerseOfTheDayTap,
+  });
+
+  final void Function(String book, int chapter, int verse)? onVerseOfTheDayTap;
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final VerseOfTheDayService _verseService = VerseOfTheDayService.instance;
+  DailyVerse? _todaysVerse;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVerse();
+  }
+
+  Future<void> _loadVerse() async {
+    final verse = await _verseService.getTodaysVerse();
+    if (mounted) {
+      setState(() {
+        _todaysVerse = verse;
+        _loading = false;
+      });
+    }
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) {
+      return 'Good morning';
+    } else if (hour < 17) {
+      return 'Good afternoon';
+    } else {
+      return 'Good evening';
+    }
+  }
+
+  String _getFirstName(User? user) {
+    if (user?.displayName != null && user!.displayName!.isNotEmpty) {
+      // Extract first name from display name
+      final parts = user.displayName!.split(' ');
+      return parts.first;
+    }
+    // Fallback to email prefix if no display name
+    if (user?.email != null) {
+      return user!.email!.split('@').first;
+    }
+    return 'Friend';
+  }
+
+  void _handleVerseOfTheDayTap() {
+    if (_todaysVerse != null && widget.onVerseOfTheDayTap != null) {
+      widget.onVerseOfTheDayTap!(
+        _todaysVerse!.book,
+        _todaysVerse!.chapter,
+        _todaysVerse!.verse,
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return const DefaultPage(
-      title: "Home",
-      emoji: "🏠",
-      subtitle: "This will be your dashboard with quick links, plans, and recent notes.",
+    final theme = Theme.of(context);
+    final user = FirebaseAuth.instance.currentUser;
+    final greeting = _getGreeting();
+    final firstName = _getFirstName(user);
+
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 16),
+              // Greeting
+              Text(
+                '$greeting,',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w300,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                firstName,
+                style: theme.textTheme.displaySmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 32),
+              // Verse of the Day
+              if (_loading)
+                const VerseOfTheDayCardLoading()
+              else if (_todaysVerse != null)
+                VerseOfTheDayCard(
+                  verse: _todaysVerse!,
+                  onTap: _handleVerseOfTheDayTap,
+                ),
+              const SizedBox(height: 24),
+              // Placeholder for future dashboard content
+              Center(
+                child: Text(
+                  'More dashboard widgets coming soon...',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
