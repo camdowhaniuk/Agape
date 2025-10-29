@@ -1621,9 +1621,6 @@ class _BibleScreenState extends State<BibleScreen> {
 
     if (_restoreTargetVerse == null ||
         _currentVisibleVerse == _restoreTargetVerse) {
-      debugPrint(
-        '[Bible] save alignment -> verse=$_currentVisibleVerse align=$_currentVisibleAlignment',
-      );
       _saveLastLocation(alignment: _currentVisibleAlignment);
     }
 
@@ -1666,6 +1663,15 @@ class _BibleScreenState extends State<BibleScreen> {
   void _armNavVisibility() {
     _navVisibilityArmed = false;
     _navVisibilityPrimed = true;
+  }
+
+  void _toggleChrome() {
+    // Toggle header visibility
+    setState(() {
+      _headerVisible = !_headerVisible;
+    });
+    // Toggle navbar visibility
+    widget.onScrollVisibilityChange?.call(_headerVisible);
   }
 
   void _jumpToInitialPosition() {
@@ -1738,7 +1744,6 @@ class _BibleScreenState extends State<BibleScreen> {
         '$_selectedBook|$_selectedChapter|$savedVerse|$effectiveAlignment|$visibleVerse';
     _storedAlignment = effectiveAlignment;
     _storedVisibleVerse = visibleVerse > 0 ? visibleVerse : null;
-    debugPrint('[Bible] saveLastLocation -> $payload');
     _userStateService.writeString('bible.lastLocation', payload);
   }
 
@@ -1999,21 +2004,25 @@ class _BibleScreenState extends State<BibleScreen> {
       backgroundColor: isDark ? Colors.black : Colors.white,
       body: Stack(
         children: [
-          NotificationListener<ScrollNotification>(
-            onNotification: _handleScrollNotification,
-            child: ScrollablePositionedList.builder(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                mediaPadding.top + 120,
-                16,
-                bottomPad,
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onDoubleTap: _toggleChrome,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _handleScrollNotification,
+              child: ScrollablePositionedList.builder(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  mediaPadding.top + 120,
+                  16,
+                  bottomPad,
+                ),
+                itemCount: _chapterRefs.length,
+                itemScrollController: _itemScrollController,
+                itemPositionsListener: _itemPositionsListener,
+                initialScrollIndex: _initialListIndex,
+                itemBuilder: (context, index) =>
+                    _buildChapterItem(context, index, textTheme, isDark),
               ),
-              itemCount: _chapterRefs.length,
-              itemScrollController: _itemScrollController,
-              itemPositionsListener: _itemPositionsListener,
-              initialScrollIndex: _initialListIndex,
-              itemBuilder: (context, index) =>
-                  _buildChapterItem(context, index, textTheme, isDark),
             ),
           ),
           _buildHeaderOverlay(

@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
@@ -15,10 +16,18 @@ import 'screens/notes_screen.dart';
 // Utils & Services
 import 'services/highlight_service.dart';
 import 'services/bible_navigation_service.dart';
+import 'services/devotional_service.dart';
 import 'utils/scripture_reference.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Lock app to portrait mode only
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -28,6 +37,9 @@ void main() async {
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
+
+  // Initialize DevotionalService to load bundled devotionals
+  await DevotionalService.instance.initialize();
 
   runApp(const AgapeApp());
 }
@@ -188,6 +200,7 @@ class _AgapeMainShellState extends State<AgapeMainShell> {
         onVerseOfTheDayTap: (book, chapter, verse) {
           _openBibleAt(book: book, chapter: chapter, verse: verse);
         },
+        onScrollVisibilityChange: _setBottomBarVisible,
       ),
       BibleScreen(
         key: ValueKey<int>(_bibleNavRequestKey),

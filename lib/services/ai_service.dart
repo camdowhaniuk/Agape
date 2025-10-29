@@ -2,24 +2,23 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+
 import 'package:http/http.dart' as http;
 
 /// Very small AI service abstraction.
 ///
-/// Replace the implementation in [reply] with your provider of choice
-/// (OpenAI, Google, Anthropic, etc.) and pass along [systemPrompt]
-/// plus the [history] to get grounded answers.
+/// Uses Google Gemini API (free forever) for AI-powered spiritual mentoring.
 class AIService {
   AIService({
     required this.systemPrompt,
     http.Client? client,
-    this.model = 'gpt-4o',
+    this.model = 'gemini-2.5-flash-lite',
     this.temperature = 0.7,
     this.maxHistoryEntries = 14,
     String? apiKey,
   })  : _client = client ?? http.Client(),
         _ownsClient = client == null,
-        _apiKey = (apiKey ?? const String.fromEnvironment('OPENAI_API_KEY')).trim();
+        _apiKey = (apiKey ?? const String.fromEnvironment('GEMINI_API_KEY')).trim();
 
   final String systemPrompt;
   final String model;
@@ -30,7 +29,11 @@ class AIService {
   final bool _ownsClient;
   final String _apiKey;
 
-  static final Uri _endpoint = Uri.parse('https://api.openai.com/v1/chat/completions');
+  // Gemini API endpoint - model is specified in URL
+  Uri get _endpoint => Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$_apiKey');
+  Uri get _streamEndpoint => Uri.parse(
+      'https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?key=$_apiKey');
 
   /// Returns a single assistant reply for the given [history].
   ///
@@ -39,7 +42,8 @@ class AIService {
   Future<String> reply({required List<AIMessage> history, required String userMessage}) async {
     if (_apiKey.isEmpty) {
       throw const AIServiceAuthException(
-        'Missing OpenAI API key. Pass --dart-define=OPENAI_API_KEY=your_key when launching the app.',
+        'Missing Gemini API key. Get your free key at https://aistudio.google.com/apikey '
+        'and pass it via --dart-define=GEMINI_API_KEY=your_key when launching the app.',
       );
     }
 
@@ -47,26 +51,42 @@ class AIService {
         ? history.sublist(history.length - maxHistoryEntries)
         : history;
 
-    final messages = <Map<String, String>>[
-      {'role': 'system', 'content': systemPrompt},
-      for (final message in trimmedHistory)
-        {
-          'role': _mapRole(message.role),
-          'content': message.content,
-        },
-    ];
+    // Build contents array for Gemini (alternating user/model messages)
+    final contents = <Map<String, dynamic>>[];
 
+    for (final message in trimmedHistory) {
+      contents.add({
+        'role': _mapRoleForGemini(message.role),
+        'parts': [
+          {'text': message.content}
+        ],
+      });
+    }
+
+    // Add current user message if not already in history
     final bool lastMatchesUser = trimmedHistory.isNotEmpty &&
         trimmedHistory.last.role == AIRole.user &&
         trimmedHistory.last.content == userMessage;
     if (!lastMatchesUser) {
-      messages.add({'role': 'user', 'content': userMessage});
+      contents.add({
+        'role': 'user',
+        'parts': [
+          {'text': userMessage}
+        ],
+      });
     }
 
+    // Gemini API request format
     final requestBody = json.encode({
-      'model': model,
-      'temperature': temperature,
-      'messages': messages,
+      'contents': contents,
+      'systemInstruction': {
+        'parts': [
+          {'text': systemPrompt}
+        ],
+      },
+      'generationConfig': {
+        'temperature': temperature,
+      },
     });
 
     late http.Response response;
@@ -74,18 +94,17 @@ class AIService {
       response = await _client.post(
         _endpoint,
         headers: {
-          HttpHeaders.authorizationHeader: 'Bearer $_apiKey',
           HttpHeaders.contentTypeHeader: 'application/json',
         },
         body: requestBody,
       );
     } on SocketException catch (error) {
-      throw AIServiceException('Network error while contacting OpenAI: $error');
+      throw AIServiceException('Network error while contacting Gemini API: $error');
     }
 
     if (response.statusCode != 200) {
       final body = response.body;
-      String message = 'OpenAI error (${response.statusCode})';
+      String message = 'Gemini API error (${response.statusCode})';
       try {
         final data = json.decode(body) as Map<String, dynamic>;
         final err = data['error'];
@@ -103,19 +122,213 @@ class AIService {
 
     try {
       final data = json.decode(response.body) as Map<String, dynamic>;
-      final choices = data['choices'];
-      if (choices is List && choices.isNotEmpty) {
-        final choice = choices.first;
-        final message = choice['message'] as Map?;
-        final content = message?['content'] as String?;
-        if (content != null && content.trim().isNotEmpty) {
-          return content.trim();
+      final candidates = data['candidates'];
+      if (candidates is List && candidates.isNotEmpty) {
+        final candidate = candidates.first;
+        final content = candidate['content'] as Map?;
+        final parts = content?['parts'] as List?;
+        if (parts != null && parts.isNotEmpty) {
+          final text = parts.first['text'] as String?;
+          if (text != null && text.trim().isNotEmpty) {
+            return text.trim();
+          }
         }
       }
-      throw const AIServiceException('OpenAI returned an empty response.');
+      throw const AIServiceException('Gemini API returned an empty response.');
     } catch (error) {
       if (error is AIServiceException) rethrow;
-      throw AIServiceException('Failed to parse OpenAI response: $error');
+      throw AIServiceException('Failed to parse Gemini API response: $error');
+    }
+  }
+
+  /// Streams an assistant reply as Gemini produces tokens.
+  Stream<String> replyStream({
+    required List<AIMessage> history,
+    required String userMessage,
+  }) async* {
+    if (_apiKey.isEmpty) {
+      throw const AIServiceAuthException(
+        'Missing Gemini API key. Get your free key at https://aistudio.google.com/apikey '
+        'and pass it via --dart-define=GEMINI_API_KEY=your_key when launching the app.',
+      );
+    }
+
+    final trimmedHistory = history.length > maxHistoryEntries
+        ? history.sublist(history.length - maxHistoryEntries)
+        : history;
+
+    final contents = <Map<String, dynamic>>[];
+
+    for (final message in trimmedHistory) {
+      contents.add({
+        'role': _mapRoleForGemini(message.role),
+        'parts': [
+          {'text': message.content}
+        ],
+      });
+    }
+
+    final bool lastMatchesUser = trimmedHistory.isNotEmpty &&
+        trimmedHistory.last.role == AIRole.user &&
+        trimmedHistory.last.content == userMessage;
+    if (!lastMatchesUser) {
+      contents.add({
+        'role': 'user',
+        'parts': [
+          {'text': userMessage}
+        ],
+      });
+    }
+
+    final requestBody = json.encode({
+      'contents': contents,
+      'systemInstruction': {
+        'parts': [
+          {'text': systemPrompt}
+        ],
+      },
+      'generationConfig': {
+        'temperature': temperature,
+      },
+    });
+
+    final request = http.Request('POST', _streamEndpoint)
+      ..headers[HttpHeaders.contentTypeHeader] = 'application/json'
+      ..body = requestBody;
+
+    http.StreamedResponse response;
+    try {
+      response = await _client.send(request);
+    } on SocketException catch (error) {
+      throw AIServiceException('Network error while contacting Gemini API: $error');
+    }
+
+    if (response.statusCode != 200) {
+      final body = await response.stream.bytesToString();
+      String message = 'Gemini API error (${response.statusCode})';
+      try {
+        final data = json.decode(body) as Map<String, dynamic>;
+        final err = data['error'];
+        if (err is Map<String, dynamic>) {
+          final msg = err['message'] as String?;
+          if (msg != null && msg.isNotEmpty) {
+            message = msg;
+          }
+        }
+      } catch (_) {
+        // ignore parse failure
+      }
+      throw AIServiceException(message);
+    }
+
+    final stream = response.stream.transform(utf8.decoder);
+    var objectBuffer = StringBuffer();
+    var capturingObject = false;
+    var objectDepth = 0;
+    var inString = false;
+    var escapeNext = false;
+
+    List<String> parsePayload(String payload) {
+      final tokens = <String>[];
+      final trimmed = payload.trim();
+      if (trimmed.isEmpty) return tokens;
+      if (trimmed == '[DONE]') return tokens;
+
+      Map<String, dynamic> data;
+      try {
+        data = json.decode(trimmed) as Map<String, dynamic>;
+      } catch (_) {
+        return tokens;
+      }
+
+      final err = data['error'];
+      if (err is Map<String, dynamic>) {
+        final msg = err['message'] as String?;
+        throw AIServiceException(
+          msg != null && msg.isNotEmpty ? msg : 'Gemini API returned an error chunk.',
+        );
+      }
+
+      final candidates = data['candidates'];
+      if (candidates is! List || candidates.isEmpty) return tokens;
+      for (final candidate in candidates) {
+        if (candidate is! Map<String, dynamic>) continue;
+        final content = candidate['content'];
+        if (content is! Map<String, dynamic>) continue;
+        final parts = content['parts'];
+        if (parts is! List) continue;
+        for (final part in parts) {
+          if (part is! Map<String, dynamic>) continue;
+          final text = part['text'];
+          if (text is String && text.isNotEmpty) {
+            tokens.add(text);
+          }
+        }
+      }
+      return tokens;
+    }
+
+    await for (final chunk in stream) {
+      for (var i = 0; i < chunk.length; i++) {
+        final char = chunk[i];
+        if (!capturingObject) {
+          if (char == '{') {
+            capturingObject = true;
+            objectDepth = 1;
+            objectBuffer.write(char);
+          }
+          continue;
+        }
+
+        objectBuffer.write(char);
+
+        if (inString) {
+          if (escapeNext) {
+            escapeNext = false;
+            continue;
+          }
+          if (char == '\\') {
+            escapeNext = true;
+            continue;
+          }
+          if (char == '"') {
+            inString = false;
+          }
+          continue;
+        }
+
+        if (char == '"') {
+          inString = true;
+          continue;
+        }
+
+        if (char == '{') {
+          objectDepth++;
+          continue;
+        }
+
+        if (char == '}') {
+          objectDepth--;
+          if (objectDepth == 0) {
+            final payload = objectBuffer.toString();
+            objectBuffer = StringBuffer();
+            capturingObject = false;
+            for (final token in parsePayload(payload)) {
+              yield token;
+            }
+          }
+        }
+      }
+    }
+
+    // Flush any remaining buffered object (in case stream ended cleanly with depth 0)
+    if (!capturingObject && objectBuffer.isNotEmpty) {
+      final payload = objectBuffer.toString();
+      if (payload.isNotEmpty) {
+        for (final token in parsePayload(payload)) {
+          yield token;
+        }
+      }
     }
   }
 
@@ -125,14 +338,14 @@ class AIService {
     }
   }
 
-  String _mapRole(AIRole role) {
+  String _mapRoleForGemini(AIRole role) {
     switch (role) {
       case AIRole.user:
         return 'user';
       case AIRole.assistant:
-        return 'assistant';
+        return 'model'; // Gemini uses 'model' instead of 'assistant'
       case AIRole.system:
-        return 'system';
+        return 'user'; // Gemini doesn't have system role in contents, handled separately
     }
   }
 }
@@ -180,3 +393,7 @@ class AIMessage {
 }
 
 enum AIRole { system, user, assistant }
+
+class _StreamCompleted implements Exception {
+  const _StreamCompleted();
+}

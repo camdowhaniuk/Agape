@@ -259,12 +259,14 @@ class _NotesScreenState extends State<NotesScreen> {
               backgroundColor: Colors.black,
               body: Stack(
                 children: [
-                  CustomScrollView(
-                    controller: _scrollController,
-                    physics: const BouncingScrollPhysics(
-                      parent: AlwaysScrollableScrollPhysics(),
-                    ),
-                    slivers: [
+                  GestureDetector(
+                    onTap: _toggleChrome,
+                    child: CustomScrollView(
+                      controller: _scrollController,
+                      physics: const BouncingScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics(),
+                      ),
+                      slivers: [
                       SliverAppBar.large(
                         backgroundColor: Colors.black,
                         surfaceTintColor: Colors.transparent,
@@ -317,6 +319,7 @@ class _NotesScreenState extends State<NotesScreen> {
                         delegate: SliverChildListDelegate(sectionWidgets),
                       ),
                     ],
+                    ),
                   ),
                   Positioned(
                     left: 56,
@@ -459,6 +462,15 @@ class _NotesScreenState extends State<NotesScreen> {
     if (!mounted) return;
     setState(() => _showNavChrome = visible);
     widget.onScrollVisibilityChange?.call(visible);
+  }
+
+  void _toggleChrome() {
+    // Toggle chrome visibility (search bar and new note button)
+    setState(() {
+      _showNavChrome = !_showNavChrome;
+    });
+    // Toggle navbar visibility
+    widget.onScrollVisibilityChange?.call(_showNavChrome);
   }
 
   void _applyFilter() {

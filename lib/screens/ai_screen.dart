@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:ui' show ImageFilter;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../services/ai_conversation.dart';
@@ -34,6 +36,8 @@ class _AIScreenState extends State<AIScreen> {
   static const String _assistantName = 'Agape';
   static const double _navOverlayHeight = 72;
   static const String _lastConversationStorageKey = 'ai.lastConversationId';
+  static const String _streamingFallbackMessage =
+      'I was unable to generate a response this time. Would you try again?';
 
   static const String _systemPrompt =
       'You are the absolute best Bible theologian-teacher. Interpret Scripture with humility, '
@@ -54,7 +58,12 @@ class _AIScreenState extends State<AIScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scroll = ScrollController(keepScrollOffset: false);
   bool _sending = false;
+  bool _streaming = false;
+  Timer? _streamUpdateTimer;
+  String? _streamingMessageId;
+  bool _shouldAutoScrollToBottom = false;
   bool _chromeVisible = true;
+  bool _adjustingChromeScroll = false;
   bool _navVisibilityArmed = false;
   bool _navVisibilityPrimed = false;
   double? _lastScrollOffset;
@@ -64,6 +73,8 @@ class _AIScreenState extends State<AIScreen> {
   double? _lastObservedMaxExtent;
   bool _navRevealSuppressed = false;
   bool _composerFocused = false;
+  double? _cachedBottomPadding;
+  double? _cachedTopPadding;
 
   @override
   void initState() {
@@ -77,16 +88,18 @@ class _AIScreenState extends State<AIScreen> {
     _controller.dispose();
     _scroll.dispose();
     _service.dispose();
+    _streamUpdateTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _loadConversations() async {
     final conversations = await _store.loadAll();
-    final storedId =
-        (await _userStateService.readString(_lastConversationStorageKey))
-            ?.trim();
-    final preferId =
-        (storedId != null && storedId.isNotEmpty) ? storedId : _activeConversationId;
+    final storedId = (await _userStateService.readString(
+      _lastConversationStorageKey,
+    ))?.trim();
+    final preferId = (storedId != null && storedId.isNotEmpty)
+        ? storedId
+        : _activeConversationId;
     if (!mounted) return;
     if (conversations.isEmpty) {
       final created = await _store.create();
@@ -101,10 +114,8 @@ class _AIScreenState extends State<AIScreen> {
       await _persistLastConversationId(created.id);
       return;
     }
-    final active = _resolveActive(
-      conversations,
-      preferId: preferId,
-    );
+    final active = _resolveActive(conversations, preferId: preferId);
+    debugPrint('[AIScreen] _loadConversations -> activeId=${active?.id} shouldAuto=$_shouldAutoScrollToBottom pending=$_pendingEnsureBottom');
     setState(() {
       _conversations = conversations;
       _activeConversationId = active?.id;
@@ -116,7 +127,26 @@ class _AIScreenState extends State<AIScreen> {
       await _persistLastConversationId(active.id);
     }
     if (_messages.isNotEmpty) {
-      _jumpToBottomSoon();
+      // Add delay to ensure ListView is built and attached before scrolling
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) {
+          debugPrint('[AIScreen] _loadConversations schedule ensure bottom shouldAuto before=$_shouldAutoScrollToBottom pending=$_pendingEnsureBottom');
+          _shouldAutoScrollToBottom = true;
+          _requestEnsureBottom(force: true);
+          _jumpToBottomSoon();
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (!mounted || !_scroll.hasClients) return;
+            final position = _scroll.position;
+            final distance = position.maxScrollExtent - position.pixels;
+            if (distance > 32) {
+              debugPrint('[AIScreen] second pass auto-scroll distance=$distance');
+              _shouldAutoScrollToBottom = true;
+              _requestEnsureBottom(force: true);
+              _jumpToBottomSoon();
+            }
+          });
+        }
+      });
     }
   }
 
@@ -185,45 +215,159 @@ class _AIScreenState extends State<AIScreen> {
     final text = _controller.text.trim();
     if (text.isEmpty || _sending) return;
     FocusScope.of(context).unfocus();
+
+    // Cache current padding values before streaming starts
+    // This prevents scroll jumps when padding recalculates
+    final media = MediaQuery.of(context);
+    final bottomInset = media.padding.bottom;
+    final keyboardInset = media.viewInsets.bottom;
+    final navAwarePadding = widget.navVisible
+        ? _navOverlayHeight + (bottomInset * 0.5 + 6)
+        : bottomInset;
+    const floatingComposerHeight = 58.0;
+    final showComposer =
+        _composerFocused || _chromeVisible || keyboardInset > 0;
+
+    _cachedBottomPadding = keyboardInset > 0
+        ? keyboardInset + floatingComposerHeight + 16
+        : (showComposer
+              ? (widget.navVisible ? navAwarePadding : bottomInset) +
+                    floatingComposerHeight +
+                    6
+              : bottomInset + 10);
+    _cachedTopPadding = media.padding.top + (_chromeVisible ? 86 : 48);
+
     final userMessage = AIMessage(role: AIRole.user, content: text);
     setState(() {
       _messages.add(userMessage);
       _sending = true;
+      _streaming = true;
       _controller.clear();
     });
     _jumpToBottomSoon();
     await _persistActiveConversation();
 
-    try {
-      final reply = await _service.reply(history: _messages, userMessage: text);
+    final history = List<AIMessage>.from(_messages);
+    final assistantPlaceholder = AIMessage(role: AIRole.assistant, content: '');
+    final placeholderId = assistantPlaceholder.timestamp.toIso8601String();
+    setState(() {
+      _messages.add(assistantPlaceholder);
+      _streamingMessageId = placeholderId;
+    });
+
+    String accumulatedText = '';
+    var receivedContent = false;
+
+    void scheduleStreamingUpdate() {
       if (!mounted) return;
-      final assistantMessage = AIMessage(
-        role: AIRole.assistant,
-        content: reply,
-      );
-      setState(() {
-        _messages.add(assistantMessage);
+      if (_streamUpdateTimer?.isActive ?? false) return;
+      _streamUpdateTimer = Timer(const Duration(milliseconds: 16), () {
+        if (!mounted) return;
+        setState(() {});
+        // Don't auto-scroll during streaming - let user control their position
+        _streamUpdateTimer = null;
       });
+    }
+
+    void updateStreamingMessage(String content) {
+      final index = _messages.indexWhere(
+        (m) => m.timestamp.toIso8601String() == placeholderId,
+      );
+      if (index == -1) return;
+      final existing = _messages[index];
+      _messages[index] = AIMessage(
+        role: existing.role,
+        content: content,
+        timestamp: existing.timestamp,
+      );
+      scheduleStreamingUpdate();
+    }
+
+    try {
+      await for (final chunk in _service.replyStream(
+        history: history,
+        userMessage: text,
+      )) {
+        accumulatedText += chunk;
+        receivedContent = true;
+        updateStreamingMessage(accumulatedText);
+      }
+
+      final trimmed = accumulatedText.trim();
+      final needsFallback =
+          !receivedContent ||
+          trimmed.isEmpty ||
+          trimmed == _streamingFallbackMessage;
+
+      if (needsFallback) {
+        try {
+          final fallbackReply = await _service.reply(
+            history: history,
+            userMessage: text,
+          );
+          final fallbackText = fallbackReply.trim();
+          if (fallbackText.isNotEmpty) {
+            accumulatedText = fallbackText;
+            receivedContent = true;
+            updateStreamingMessage(fallbackText);
+          } else if (!receivedContent) {
+            updateStreamingMessage(_streamingFallbackMessage);
+          }
+        } catch (error) {
+          debugPrint('AI fallback reply failed: $error');
+          updateStreamingMessage(
+            error is AIServiceAuthException
+                ? 'I need your Gemini API key before I can respond. Launch the app with '
+                      '--dart-define=GEMINI_API_KEY=your_key and try again.'
+                : 'I ran into a problem replying just now. Would you try again? (Error: $error)',
+          );
+        }
+      }
+
+      _streamUpdateTimer?.cancel();
+      if (mounted) {
+        setState(() {});
+      }
       await _persistActiveConversation();
-      _requestEnsureBottom();
     } catch (error) {
-      if (!mounted) return;
       debugPrint('AI reply failed: $error');
       final bool authError = error is AIServiceAuthException;
-      final fallback = AIMessage(
-        role: AIRole.assistant,
-        content: authError
-            ? 'I need your OpenAI API key before I can respond. Launch the app with '
-                  '--dart-define=OPENAI_API_KEY=your_key and try again.'
+      updateStreamingMessage(
+        authError
+            ? 'I need your Gemini API key before I can respond. Launch the app with '
+                  '--dart-define=GEMINI_API_KEY=your_key and try again.'
             : 'I ran into a problem replying just now. Would you try again? (Error: $error)',
       );
-      setState(() {
-        _messages.add(fallback);
-      });
+      _streamUpdateTimer?.cancel();
+      if (mounted) {
+        setState(() {});
+      }
       await _persistActiveConversation();
     } finally {
-      if (mounted) setState(() => _sending = false);
-      _jumpToBottomSoon();
+      _streamUpdateTimer?.cancel();
+      _streamUpdateTimer = null;
+      _streamingMessageId = null;
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _streaming = false;
+        });
+        // Clear padding cache after a delay to ensure smooth transition
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (mounted) {
+            setState(() {
+              _cachedBottomPadding = null;
+              _cachedTopPadding = null;
+            });
+          }
+        });
+      } else {
+        _sending = false;
+        _streaming = false;
+        _cachedBottomPadding = null;
+        _cachedTopPadding = null;
+      }
+      // Don't auto-scroll after streaming - let user stay where they are reading
     }
   }
 
@@ -246,7 +390,8 @@ class _AIScreenState extends State<AIScreen> {
         curve: Curves.easeOut,
       );
     });
-    _requestEnsureBottom();
+    // Don't use _requestEnsureBottom() - it causes aggressive scroll jumps
+    // The animateTo above is sufficient for sending messages
   }
 
   void _handleComposerFocus(bool focused) {
@@ -276,16 +421,34 @@ class _AIScreenState extends State<AIScreen> {
 
   void _scrollToBottomFromNav() {
     _setChromeVisible(true);
+    debugPrint('[AIScreen] _scrollToBottomFromNav shouldAuto=$_shouldAutoScrollToBottom pending=$_pendingEnsureBottom');
     if (_messages.isEmpty) return;
-    _requestEnsureBottom();
+    if (!_shouldAutoScrollToBottom && !_pendingEnsureBottom) {
+      debugPrint(
+        '[AIScreen] _scrollToBottomFromNav skipped (shouldAuto=$_shouldAutoScrollToBottom pending=$_pendingEnsureBottom)',
+      );
+      return;
+    }
+    _requestEnsureBottom(force: _shouldAutoScrollToBottom);
   }
 
-  void _requestEnsureBottom() {
+  void _requestEnsureBottom({bool force = false}) {
     if (_messages.isEmpty) {
+      debugPrint('[AIScreen] _requestEnsureBottom aborted (no messages)');
       _pendingEnsureBottom = false;
       return;
     }
-    if (_pendingEnsureBottom) return;
+    if (!force && !_shouldAutoScrollToBottom) {
+      debugPrint(
+        '[AIScreen] _requestEnsureBottom skipped (shouldAutoScroll=$_shouldAutoScrollToBottom)',
+      );
+      return;
+    }
+    if (_pendingEnsureBottom) {
+      debugPrint('[AIScreen] _requestEnsureBottom already pending shouldAuto=$_shouldAutoScrollToBottom');
+      return;
+    }
+    debugPrint('[AIScreen] _requestEnsureBottom start force=$force shouldAuto=$_shouldAutoScrollToBottom');
     _pendingEnsureBottom = true;
     _ensureBottomAttempts = 0;
     _lastObservedMaxExtent = null;
@@ -298,51 +461,88 @@ class _AIScreenState extends State<AIScreen> {
       _pendingEnsureBottom = false;
       return;
     }
-    final context = _bottomAnchorKey.currentContext;
-    if (context == null || !_scroll.hasClients) {
-      if (_ensureBottomAttempts++ < 30) {
+    final anchorContext = _bottomAnchorKey.currentContext;
+    if (!_scroll.hasClients) {
+      debugPrint(
+        '[AIScreen] _ensureBottomVisible attempt=$_ensureBottomAttempts anchorCtx=$anchorContext hasClients=${_scroll.hasClients}',
+      );
+      if (_ensureBottomAttempts++ < 60) {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => _ensureBottomVisible(),
         );
       } else {
         _pendingEnsureBottom = false;
+        debugPrint('[AIScreen] _ensureBottomVisible giving up (no scroll clients)');
       }
       return;
     }
     final position = _scroll.position;
-    final previousMax = _lastObservedMaxExtent;
-    final currentMax = position.maxScrollExtent;
-    if (currentMax <= 0) {
-      if (_ensureBottomAttempts++ < 30) {
+    if (!position.hasContentDimensions) {
+      debugPrint(
+        '[AIScreen] _ensureBottomVisible attempt=$_ensureBottomAttempts waiting for dimensions anchorCtx=$anchorContext',
+      );
+      if (_ensureBottomAttempts++ < 60) {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => _ensureBottomVisible(),
         );
       } else {
         _pendingEnsureBottom = false;
+        debugPrint('[AIScreen] _ensureBottomVisible giving up (no dimensions)');
+      }
+      return;
+    }
+    final previousMax = _lastObservedMaxExtent;
+    final currentMax = position.maxScrollExtent;
+    if (currentMax <= 0) {
+      debugPrint(
+        '[AIScreen] _ensureBottomVisible attempt=$_ensureBottomAttempts maxScroll=0',
+      );
+      if (_ensureBottomAttempts++ < 60) {
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _ensureBottomVisible(),
+        );
+      } else {
+        _pendingEnsureBottom = false;
+        debugPrint('[AIScreen] _ensureBottomVisible giving up (maxScroll<=0)');
       }
       return;
     }
     if (previousMax == null || (currentMax - previousMax).abs() > 1.0) {
       _lastObservedMaxExtent = currentMax;
-      if (_ensureBottomAttempts++ < 30) {
+      debugPrint(
+        '[AIScreen] _ensureBottomVisible attempt=$_ensureBottomAttempts waiting for settle current=$currentMax previous=$previousMax',
+      );
+      if (_ensureBottomAttempts++ < 60) {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => _ensureBottomVisible(),
         );
       } else {
         _pendingEnsureBottom = false;
+        debugPrint('[AIScreen] _ensureBottomVisible giving up (never settled)');
       }
       return;
     }
     _pendingEnsureBottom = false;
     _lastObservedMaxExtent = null;
     _ensureBottomAttempts = 0;
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    _shouldAutoScrollToBottom = false;
+    final mediaContext = anchorContext ?? context;
+    final bottomPadding = MediaQuery.of(mediaContext).padding.bottom;
     final navPadding = widget.navVisible ? _navOverlayHeight : 0;
     final extra = bottomPadding + navPadding + 8;
-    position.jumpTo((currentMax + extra).clamp(0.0, currentMax + extra));
+    debugPrint(
+      '[AIScreen] _ensureBottomVisible jumpTo max=$currentMax extra=$extra',
+    );
+    final target = currentMax <= 0 ? 0.0 : currentMax;
+    debugPrint('[AIScreen] _ensureBottomVisible jumping to $target (max=$currentMax) currentOffset=${position.pixels}');
+    position.jumpTo(target);
+    debugPrint('[AIScreen] _ensureBottomVisible after jump offset=${position.pixels} shouldAuto=$_shouldAutoScrollToBottom pending=$_pendingEnsureBottom');
   }
 
-  Future<void> _refreshConversations({String? preferId}) async {
+  Future<void> _refreshConversations({
+    String? preferId,
+    bool autoScroll = false,
+  }) async {
     final conversations = await _store.loadAll();
     if (!mounted) return;
     final active = _resolveActive(conversations, preferId: preferId);
@@ -357,12 +557,31 @@ class _AIScreenState extends State<AIScreen> {
       await _persistLastConversationId(active.id);
     }
     if (_messages.isNotEmpty) {
-      _jumpToBottomSoon();
+      // Add delay to ensure ListView is built and attached before scrolling
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted && autoScroll) {
+          _shouldAutoScrollToBottom = true;
+          _requestEnsureBottom(force: true);
+          _jumpToBottomSoon();
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (!mounted || !_scroll.hasClients) return;
+            final position = _scroll.position;
+            final distance = position.maxScrollExtent - position.pixels;
+            if (distance > 32) {
+              debugPrint('[AIScreen] second pass auto-scroll (refresh) distance=$distance');
+              _shouldAutoScrollToBottom = true;
+              _requestEnsureBottom(force: true);
+              _jumpToBottomSoon();
+            }
+          });
+        }
+      });
     }
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
+
     if (!_navVisibilityArmed) {
       if (_navVisibilityPrimed &&
           notification is UserScrollNotification &&
@@ -390,6 +609,15 @@ class _AIScreenState extends State<AIScreen> {
     if (!force && _navRevealSuppressed && visible) {
       return;
     }
+
+    if (_cachedTopPadding == null) {
+      _cachedTopPadding = _computeListTopPadding(chromeVisible: _chromeVisible);
+    }
+    if (_cachedBottomPadding == null) {
+      _cachedBottomPadding =
+          _computeListBottomPadding(chromeVisible: _chromeVisible);
+    }
+
     if (_chromeVisible == visible) {
       if (force && visible) {
         _resetNavVisibilityArming();
@@ -397,10 +625,53 @@ class _AIScreenState extends State<AIScreen> {
       return;
     }
     setState(() => _chromeVisible = visible);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _cachedTopPadding = null;
+      _cachedBottomPadding = null;
+    });
     if (force && visible) {
       _resetNavVisibilityArming();
     }
     widget.onScrollVisibilityChange?.call(visible);
+  }
+
+  void _toggleChrome() {
+    _setChromeVisible(!_chromeVisible, force: true);
+  }
+
+  double _computeListTopPadding({required bool chromeVisible}) {
+    final media = MediaQuery.of(context);
+    if (_cachedTopPadding != null && (_streaming || _sending)) {
+      return _cachedTopPadding!;
+    }
+    return media.padding.top + (chromeVisible ? 86 : 48);
+  }
+
+  double _computeListBottomPadding({required bool chromeVisible}) {
+    final media = MediaQuery.of(context);
+    final bottomInset = media.padding.bottom;
+    final keyboardInset = media.viewInsets.bottom;
+    final navBottomPadding = bottomInset * 0.5 + 6;
+    const floatingComposerHeight = 58.0;
+    final showComposer = _composerFocused || chromeVisible || keyboardInset > 0;
+
+    if (_cachedBottomPadding != null && (_streaming || _sending)) {
+      return _cachedBottomPadding!;
+    }
+    if (keyboardInset > 0) {
+      return keyboardInset + floatingComposerHeight + 16;
+    }
+
+    if (showComposer) {
+      final navAwarePadding = widget.navVisible
+          ? _navOverlayHeight + navBottomPadding
+          : bottomInset;
+      final base = widget.navVisible ? navAwarePadding : bottomInset;
+      return base + floatingComposerHeight + 6;
+    }
+
+    return bottomInset + 10;
   }
 
   Future<void> _selectConversation(String id) async {
@@ -698,8 +969,11 @@ class _AIScreenState extends State<AIScreen> {
     final double composerBottomInset = keyboardInset > 0
         ? keyboardInset + 8
         : (widget.navVisible ? navAwarePadding + 4 : bottomInset + 8);
+    // Use cached padding during and shortly after streaming to prevent scroll jumps
     final double listBottomPadding;
-    if (keyboardInset > 0) {
+    if (_cachedBottomPadding != null && (_streaming || _sending)) {
+      listBottomPadding = _cachedBottomPadding!;
+    } else if (keyboardInset > 0) {
       listBottomPadding = keyboardInset + floatingComposerHeight + 16;
     } else if (showComposer) {
       listBottomPadding =
@@ -709,17 +983,24 @@ class _AIScreenState extends State<AIScreen> {
     } else {
       listBottomPadding = bottomInset + 10;
     }
+
     final double listTopPadding =
-        media.padding.top + (_chromeVisible ? 86 : 48);
+        (_cachedTopPadding != null && (_streaming || _sending))
+        ? _cachedTopPadding!
+        : media.padding.top + (_chromeVisible ? 86 : 48);
 
     return Scaffold(
       extendBody: true,
       body: Stack(
         children: [
           Positioned.fill(
-            child: _buildChatBody(
-              bottomPadding: listBottomPadding,
-              topPadding: listTopPadding,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onDoubleTap: _toggleChrome,
+              child: _buildChatBody(
+                bottomPadding: listBottomPadding,
+                topPadding: listTopPadding,
+              ),
             ),
           ),
           Align(
@@ -727,19 +1008,13 @@ class _AIScreenState extends State<AIScreen> {
             child: AnimatedPadding(
               duration: const Duration(milliseconds: 260),
               curve: Curves.easeOutCubic,
-              padding: EdgeInsets.fromLTRB(
-                16,
-                0,
-                16,
-                composerBottomInset,
-              ),
+              padding: EdgeInsets.fromLTRB(12, 0, 12, composerBottomInset),
               child: IgnorePointer(
                 ignoring: !showComposer && keyboardInset <= 0,
                 child: AnimatedSlide(
                   duration: const Duration(milliseconds: 260),
                   curve: Curves.easeOutCubic,
-                  offset:
-                      showComposer ? Offset.zero : const Offset(0, 0.25),
+                  offset: showComposer ? Offset.zero : const Offset(0, 0.25),
                   child: AnimatedOpacity(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeOut,
@@ -757,8 +1032,8 @@ class _AIScreenState extends State<AIScreen> {
             ),
           ),
           AnimatedPositioned(
-            left: 16,
-            right: 16,
+            left: 12,
+            right: 12,
             duration: const Duration(milliseconds: 240),
             curve: Curves.easeOutCubic,
             top: _chromeVisible
@@ -813,17 +1088,15 @@ class _AIScreenState extends State<AIScreen> {
       );
     }
 
-    final bool showTypingBubble = _sending;
     final bool includeIntro = true;
     final int messageStartIndex = includeIntro ? 1 : 0;
-    final int typingOffset = showTypingBubble ? 1 : 0;
-    final int totalCount = _messages.length + messageStartIndex + typingOffset;
+    final int totalCount = _messages.length + messageStartIndex;
 
     return NotificationListener<ScrollNotification>(
       onNotification: _handleScrollNotification,
       child: ListView.builder(
         controller: _scroll,
-        padding: EdgeInsets.fromLTRB(16, topPadding, 16, bottomPadding),
+        padding: EdgeInsets.fromLTRB(12, topPadding, 12, bottomPadding),
         itemCount: totalCount + 1,
         itemBuilder: (context, index) {
           if (index == totalCount) {
@@ -836,19 +1109,27 @@ class _AIScreenState extends State<AIScreen> {
             );
           }
 
-          if (_sending && index == totalCount - 1) {
-            return const _TypingBubble();
-          }
-
           final messageIndex = index - messageStartIndex;
           final m = _messages[messageIndex];
-          return _ChatBubble(
-            content: m.content,
-            fromUser: m.role == AIRole.user,
-            timestamp: m.timestamp,
-            assistantName: _assistantName,
-            onReferenceTap: widget.onReferenceTap,
-          );
+          final isLastMessage = messageIndex == _messages.length - 1;
+          final isStreamingThisMessage =
+              _streaming && isLastMessage && m.role == AIRole.assistant;
+
+          // Use different widgets for user vs assistant messages
+          if (m.role == AIRole.user) {
+            return _UserMessageBubble(
+              content: m.content,
+              timestamp: m.timestamp,
+            );
+          } else {
+            return _AssistantMessage(
+              content: m.content,
+              timestamp: m.timestamp,
+              assistantName: _assistantName,
+              onReferenceTap: widget.onReferenceTap,
+              isStreaming: isStreamingThisMessage,
+            );
+          }
         },
       ),
     );
@@ -944,7 +1225,9 @@ class _FloatingComposerState extends State<_FloatingComposer> {
                     decoration: InputDecoration(
                       hintText: "What's on your mind?",
                       hintStyle: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.textTheme.bodyMedium?.color?.withOpacity(0.55),
+                        color: theme.textTheme.bodyMedium?.color?.withOpacity(
+                          0.55,
+                        ),
                       ),
                       contentPadding: EdgeInsets.zero,
                       border: InputBorder.none,
@@ -1060,38 +1343,26 @@ class _SurfaceIconButton extends StatelessWidget {
   }
 }
 
-class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({
+class _AssistantMessage extends StatelessWidget {
+  const _AssistantMessage({
     required this.content,
-    required this.fromUser,
     required this.timestamp,
     required this.assistantName,
     this.onReferenceTap,
+    this.isStreaming = false,
   });
 
   final String content;
-  final bool fromUser;
   final DateTime timestamp;
   final String assistantName;
   final void Function(ScriptureReference reference)? onReferenceTap;
+  final bool isStreaming;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bg = fromUser
-        ? (isDark ? const Color(0xFF2B2B30) : Colors.white)
-        : (isDark ? const Color(0xFF1F1F23) : const Color(0xFFF1ECF8));
-    final fg = fromUser
-        ? (isDark ? Colors.white : Colors.black87)
-        : (isDark ? Colors.white.withOpacity(0.92) : Colors.black87);
-    final align = fromUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
-    final radius = BorderRadius.only(
-      topLeft: const Radius.circular(16),
-      topRight: const Radius.circular(16),
-      bottomLeft: Radius.circular(fromUser ? 16 : 4),
-      bottomRight: Radius.circular(fromUser ? 4 : 16),
-    );
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white.withOpacity(0.95) : Colors.black87;
     final meta = TimeOfDay.fromDateTime(timestamp).format(context);
 
     void openReference(ScriptureReference ref) {
@@ -1106,15 +1377,104 @@ class _ChatBubble extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 0),
       child: Column(
-        crossAxisAlignment: align,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header: Agape name with icon (no background)
+          Padding(
+            padding: const EdgeInsets.only(left: 8, bottom: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.auto_awesome_rounded,
+                  size: 14,
+                  color: isDark ? Colors.white70 : const Color(0xFF7954B1),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  assistantName,
+                  style: TextStyle(
+                    fontSize: 12,
+                    letterSpacing: 0.2,
+                    fontWeight: FontWeight.w600,
+                    color: textColor.withOpacity(isDark ? 0.9 : 0.78),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Message content - full width with left padding, NO background
+          Padding(
+            padding: const EdgeInsets.only(left: 8, right: 8),
+            child: MarkdownMessage(
+              markdown: content,
+              baseStyle: TextStyle(
+                height: 1.52,
+                fontSize: 16.5,
+                color: textColor,
+                letterSpacing: 0.15,
+              ),
+              isDark: isDark,
+              linkColor: theme.colorScheme.primary,
+              onScriptureTap: openReference,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, top: 8),
+            child: SizedBox(
+              height: 24,
+              child: isStreaming
+                  ? const _BlinkingLogo()
+                  : Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        meta,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontSize: 11,
+                          color: (isDark ? Colors.white70 : Colors.black54)
+                              .withOpacity(0.7),
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserMessageBubble extends StatelessWidget {
+  const _UserMessageBubble({required this.content, required this.timestamp});
+
+  final String content;
+  final DateTime timestamp;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = isDark ? const Color(0xFF2B2B30) : const Color(0xFFE8E8ED);
+    final fg = isDark ? Colors.white : Colors.black87;
+    final meta = TimeOfDay.fromDateTime(timestamp).format(context);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Container(
             constraints: const BoxConstraints(maxWidth: 640),
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: radius,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(18),
+                topRight: Radius.circular(18),
+                bottomLeft: Radius.circular(18),
+                bottomRight: Radius.circular(4),
+              ),
               border: Border.all(
                 color: isDark ? Colors.white10 : Colors.black12,
                 width: 0.6,
@@ -1128,50 +1488,21 @@ class _ChatBubble extends StatelessWidget {
                   ),
               ],
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!fromUser)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.auto_awesome_rounded,
-                          size: 14,
-                          color: isDark
-                              ? Colors.white70
-                              : const Color(0xFF7954B1),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          assistantName,
-                          style: TextStyle(
-                            fontSize: 12,
-                            letterSpacing: 0.2,
-                            fontWeight: FontWeight.w600,
-                            color: fg.withOpacity(isDark ? 0.9 : 0.78),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                MarkdownMessage(
-                  markdown: content,
-                  baseStyle: TextStyle(height: 1.48, fontSize: 16, color: fg),
-                  isDark: isDark,
-                  linkColor: theme.colorScheme.primary,
-                  onScriptureTap: openReference,
-                ),
-              ],
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Text(
+              content,
+              style: TextStyle(
+                height: 1.48,
+                fontSize: 15.5,
+                color: fg,
+                letterSpacing: 0.1,
+              ),
             ),
           ),
           const SizedBox(height: 4),
           Text(
             meta,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            style: theme.textTheme.bodySmall?.copyWith(
               fontSize: 11,
               color: (isDark ? Colors.white70 : Colors.black54).withOpacity(
                 0.8,
@@ -1376,96 +1707,74 @@ class _BibleReferencePage extends StatelessWidget {
   }
 }
 
-class _TypingBubble extends StatelessWidget {
-  const _TypingBubble();
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final Color bubbleColor = isDark
-        ? const Color(0xFF242429).withOpacity(0.88)
-        : Colors.white.withOpacity(0.96);
-    final Color borderColor = isDark
-        ? Colors.white12
-        : Colors.black12.withOpacity(0.16);
+class _BlinkingLogo extends StatefulWidget {
+  const _BlinkingLogo();
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-              bottomRight: Radius.circular(16),
-              bottomLeft: Radius.circular(4),
-            ),
-            border: Border.all(color: borderColor, width: 0.6),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: 46,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: List.generate(
-                    3,
-                    (i) => _Dot(delay: Duration(milliseconds: 200 * i)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  @override
+  State<_BlinkingLogo> createState() => _BlinkingLogoState();
+}
+
+class _BlinkingLogoState extends State<_BlinkingLogo>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+    _opacity = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
   }
-}
-
-class _Dot extends StatefulWidget {
-  const _Dot({required this.delay});
-  final Duration delay;
-
-  @override
-  State<_Dot> createState() => _DotState();
-}
-
-class _DotState extends State<_Dot> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat();
 
   @override
   void dispose() {
-    _c.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _c,
-      builder: (context, child) {
-        final t = ((_c.value + widget.delay.inMilliseconds / 900) % 1.0);
-        final up = t < 0.5 ? (t / 0.5) : (1 - (t - 0.5) / 0.5);
-        final dy = 2.0 * up;
-        return Transform.translate(offset: Offset(0, -dy), child: child);
-      },
-      child: Container(
-        width: 6,
-        height: 6,
-        decoration: BoxDecoration(
-          color: Theme.of(context).brightness == Brightness.dark
-              ? Colors.white70
-              : Colors.black54,
-          shape: BoxShape.circle,
-        ),
+    return FadeTransition(
+      opacity: _opacity,
+      child: CustomPaint(
+        size: const Size(16, 24),
+        painter: _CrossPainter(color: Colors.white),
       ),
     );
   }
+}
+
+class _CrossPainter extends CustomPainter {
+  _CrossPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    final centerX = size.width / 2;
+    final horizontalY =
+        size.height * 0.35; // Position horizontal beam at 35% from top
+    final horizontalWidth = size.width * 0.45; // Shorter horizontal beam
+
+    // Vertical line (full height)
+    canvas.drawLine(Offset(centerX, 0), Offset(centerX, size.height), paint);
+
+    // Horizontal line (shorter, positioned higher up)
+    canvas.drawLine(
+      Offset(centerX - horizontalWidth, horizontalY),
+      Offset(centerX + horizontalWidth, horizontalY),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CrossPainter oldDelegate) => oldDelegate.color != color;
 }

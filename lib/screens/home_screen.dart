@@ -7,9 +7,11 @@ class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     this.onVerseOfTheDayTap,
+    this.onScrollVisibilityChange,
   });
 
   final void Function(String book, int chapter, int verse)? onVerseOfTheDayTap;
+  final void Function(bool)? onScrollVisibilityChange;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -17,13 +19,51 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final VerseOfTheDayService _verseService = VerseOfTheDayService.instance;
+  final ScrollController _scrollController = ScrollController();
   DailyVerse? _todaysVerse;
   bool _loading = true;
+  double _lastScrollOffset = 0.0;
+  bool _navVisible = true;
 
   @override
   void initState() {
     super.initState();
     _loadVerse();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final currentOffset = _scrollController.offset;
+    final scrollingDown = currentOffset > _lastScrollOffset;
+    final scrollingUp = currentOffset < _lastScrollOffset;
+
+    // Hide nav when scrolling down, show when scrolling up
+    if (scrollingDown && currentOffset > 50) {
+      _setNavVisible(false);
+    } else if (scrollingUp || currentOffset <= 50) {
+      _setNavVisible(true);
+    }
+
+    _lastScrollOffset = currentOffset;
+  }
+
+  void _setNavVisible(bool visible) {
+    if (_navVisible == visible) return;
+    setState(() {
+      _navVisible = visible;
+    });
+    widget.onScrollVisibilityChange?.call(visible);
+  }
+
+  void _toggleNav() {
+    _setNavVisible(!_navVisible);
   }
 
   Future<void> _loadVerse() async {
@@ -78,12 +118,26 @@ class _HomeScreenState extends State<HomeScreen> {
     final firstName = _getFirstName(user);
 
     return Scaffold(
-      body: SafeArea(
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleNav,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: MediaQuery.of(context).size.height,
+            ),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                24.0,
+                MediaQuery.of(context).padding.top + 24.0,
+                24.0,
+                MediaQuery.of(context).padding.bottom + 24.0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               const SizedBox(height: 16),
               // Greeting
               Text(
@@ -108,7 +162,7 @@ class _HomeScreenState extends State<HomeScreen> {
               else if (_todaysVerse != null)
                 VerseOfTheDayCard(
                   verse: _todaysVerse!,
-                  onTap: _handleVerseOfTheDayTap,
+                  onVerseTap: _handleVerseOfTheDayTap,
                 ),
               const SizedBox(height: 24),
               // Placeholder for future dashboard content
@@ -121,6 +175,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ],
+              ),
+            ),
           ),
         ),
       ),

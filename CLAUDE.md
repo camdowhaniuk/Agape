@@ -10,7 +10,7 @@ Key features:
 - Hybrid offline-first Bible reader with red-letter support and chapter caching
 - Apple Notes-inspired note interface with pinning, grouping, and search
 - Persistent verse highlights with color palettes
-- AI chat mentor powered by OpenAI (`gpt-4o`) with Scripture grounding
+- AI chat mentor powered by Google Gemini (free forever) with Scripture grounding
 - Firebase authentication (email, Google, Facebook, Apple)
 
 ## Development Commands
@@ -26,8 +26,9 @@ cd ios && pod install  # iOS only, after native dependency changes
 # Standard run
 flutter run
 
-# With OpenAI API key (required for AI features)
-flutter run --dart-define=OPENAI_API_KEY=sk-...
+# With Google Gemini API key (required for AI features)
+# Get your free key at https://aistudio.google.com/apikey
+flutter run --dart-define=GEMINI_API_KEY=your_key_here
 
 # Specific device
 flutter run -d ios
@@ -77,7 +78,7 @@ lib/
 │   ├── bible_service.dart          # 3-tier fetch: USFM assets → cached JSON → bible-api.com
 │   ├── highlight_service.dart      # Verse highlight persistence via SharedPreferences
 │   ├── notes_service.dart          # Note CRUD with ValueNotifier
-│   ├── ai_service.dart             # OpenAI Chat Completions wrapper
+│   ├── ai_service.dart             # Google Gemini API wrapper (free forever)
 │   ├── ai_conversation.dart        # Conversation model
 │   ├── ai_conversation_store.dart  # Local conversation persistence
 │   ├── user_state_service.dart     # Last Bible location, settings
@@ -122,9 +123,12 @@ lib/
 ## Configuration & Environment
 
 ### Required Runtime Variables
-- `OPENAI_API_KEY`: Must be passed via `--dart-define=OPENAI_API_KEY=sk-...`
-  - Used by `AIService` (lib/services/ai_service.dart:22)
+- `GEMINI_API_KEY`: Optional, for AI chat features
+  - Get your free key at https://aistudio.google.com/apikey (no credit card required)
+  - Pass via `--dart-define=GEMINI_API_KEY=your_key_here`
+  - Used by `AIService` (lib/services/ai_service.dart:20)
   - Never persisted; purely runtime
+  - **Cost**: Free forever (up to 1,000 requests/day)
 
 ### Firebase Setup
 - Android: `android/app/google-services.json`

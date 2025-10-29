@@ -1,5 +1,7 @@
 import '../data/verse_of_the_day_verses.dart';
 import '../services/bible_service.dart';
+import '../services/devotional_service.dart';
+import '../models/devotional.dart';
 
 /// Model for Verse of the Day data
 class DailyVerse {
@@ -8,14 +10,33 @@ class DailyVerse {
     required this.chapter,
     required this.verse,
     required this.text,
+    this.devotional,
   });
 
   final String book;
   final int chapter;
   final int verse;
   final String text;
+  final Devotional? devotional;
 
   String get reference => '$book $chapter:$verse';
+
+  /// Create a copy with updated fields
+  DailyVerse copyWith({
+    String? book,
+    int? chapter,
+    int? verse,
+    String? text,
+    Devotional? devotional,
+  }) {
+    return DailyVerse(
+      book: book ?? this.book,
+      chapter: chapter ?? this.chapter,
+      verse: verse ?? this.verse,
+      text: text ?? this.text,
+      devotional: devotional ?? this.devotional,
+    );
+  }
 }
 
 /// Service to manage Verse of the Day functionality
@@ -24,9 +45,12 @@ class VerseOfTheDayService {
   VerseOfTheDayService._();
 
   final BibleService _bibleService = BibleService();
+  final DevotionalService _devotionalService = DevotionalService.instance;
 
   /// Get today's verse based on deterministic daily rotation
   /// Uses day of year to ensure same verse for all users on same day
+  ///
+  /// This method loads the pre-generated devotional from bundled assets.
   Future<DailyVerse?> getTodaysVerse() async {
     try {
       final now = DateTime.now();
@@ -55,11 +79,20 @@ class VerseOfTheDayService {
       final text = verseMap['text'] as String? ?? '';
       if (text.isEmpty) return null;
 
+      // Get or generate devotional for this verse using Gemini
+      final devotional = await _devotionalService.getDevotionalForVerse(
+        book: book,
+        chapter: chapter,
+        verse: verseNumber,
+        verseText: text,
+      );
+
       return DailyVerse(
         book: book,
         chapter: chapter,
         verse: verseNumber,
         text: text,
+        devotional: devotional,
       );
     } catch (e) {
       // Return null on error - caller can handle gracefully
